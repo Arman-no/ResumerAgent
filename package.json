@@ -6,6 +6,7 @@
   "private": true,
   "engines": { "node": ">=18" },
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "launch": "node scripts/launch.mjs"
   }
 }

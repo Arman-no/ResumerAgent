@@ -205,6 +205,27 @@ main { padding: 28px; }
 
 .hidden { display: none !important; }
 
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--accent);
+  color: white;
+  font-size: 13px;
+  padding: 10px 16px;
+}
+.update-banner button {
+  background: white;
+  color: var(--accent);
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .toast {
   position: fixed;
   bottom: 24px;

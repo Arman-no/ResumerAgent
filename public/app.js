@@ -9,6 +9,10 @@ const toastEl = document.getElementById('toast');
 const cardsByKey = new Map();
 let firstLoad = true;
 let lastRefreshedAt = null;
+// Set from the first successful poll's startedAt; compared against every
+// later poll so a code change on the server is noticed even though this
+// tab's own app.js has no way to reload itself.
+let knownServerStartedAt = null;
 
 // sessionId -> pending confirm-window timeout, for the two-click purge
 // confirmation below.
@@ -249,11 +253,34 @@ function renderSessions(sessions) {
   }
 }
 
+function showUpdateBanner() {
+  if (document.getElementById('update-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'update-banner';
+  banner.className = 'update-banner';
+  banner.innerHTML = `
+    <span>A newer version of ResumerAgent is running on the server.</span>
+    <button id="update-reload-btn">Reload</button>
+  `;
+  document.body.prepend(banner);
+  document.getElementById('update-reload-btn').addEventListener('click', () => location.reload());
+}
+
 async function loadSessions() {
   try {
     const res = await fetch('/api/sessions');
     if (!res.ok) throw new Error(await res.text());
-    const sessions = await res.json();
+    const payload = await res.json();
+    if (knownServerStartedAt === null) {
+      knownServerStartedAt = payload.startedAt;
+    } else if (payload.startedAt !== knownServerStartedAt) {
+      // The server this tab is talking to restarted (new code deployed,
+      // or the launcher replaced a stale instance) since this page loaded.
+      // This tab's own app.js is now the stale part — no fetch of new data
+      // will ever surface new UI, since the rendering code itself is old.
+      showUpdateBanner();
+    }
+    const sessions = payload.sessions;
     errorEl.classList.add('hidden');
     renderSessions(sessions);
     // Store the actual fetch time — computing relativeTime(Date.now())
