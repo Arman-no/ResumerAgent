@@ -74,7 +74,32 @@ genuine need to declutter old/no-longer-wanted sessions.)
 ## Portability (native install vs. Docker)
 
 This machine's native install sets `CLAUDE_CONFIG_DIR=C:\AE\claude-work`
-(confirmed via env var), which is where `sessions/` and `projects/` live. A
+(confirmed via env var), which is where `sessions/` and `projects/` live.
+**Revision (2026-09-09): that "confirmed via env var" was checked from
+inside a Claude Code session, which is not the same environment the
+desktop shortcut runs in.** Real use surfaced this the hard way: the
+dashboard was showing 10 sessions when launched however this project's own
+testing did it all day, then dropped to 2 (both live, both found only via
+the `claude agents` live overlay, zero found via transcript scan) the
+moment the user used the actual desktop shortcut. Root cause —
+`CLAUDE_CONFIG_DIR` is not a real, persisted Windows environment variable
+on this machine (confirmed via `[Environment]::GetEnvironmentVariable(...,
+'User')` / `'Machine'`, both empty); it's only present inside whatever
+process tree a Claude Code session's own harness sets it for. A plain
+`explorer.exe`-launched `cmd.exe` (i.e. double-clicking the shortcut) never
+inherits it, so `lib/config.mjs` silently fell back to `~/.claude` — a
+real but stale, mostly-empty directory (old `sessions/`, different/older
+`projects/`) — with no error, just a much smaller, wrong session list.
+**Fixed by no longer relying on that fallback at all**: an explicit `.env`
+at the repo root (gitignored, per its existing purpose) now sets
+`SESSIONS_ROOT=C:\AE\claude-work` directly. Verified by relaunching with
+`CLAUDE_CONFIG_DIR` deliberately unset — session count is correct (10)
+either way once `SESSIONS_ROOT` is explicit. The lesson: never trust an
+env-var check done from inside an agent session as representative of how
+a real, independently-launched process (a shortcut, a scheduled task, a
+service) will actually see the environment — the two process trees are
+not guaranteed to share anything beyond what's persisted at the OS level.
+A
 colleague running Claude Code through Docker will have a different, unknown
 layout: their session/transcript files live inside the container's
 filesystem, and are only visible on their host if their container setup
