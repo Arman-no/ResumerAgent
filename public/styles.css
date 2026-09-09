@@ -10,6 +10,7 @@
   --blue: #5b8def;
   --amber: #e0a740;
   --gray: #5b6270;
+  --danger: #e05d5d;
   --radius: 10px;
 }
 
@@ -150,7 +151,7 @@ main { padding: 28px; }
   overflow: hidden;
 }
 
-.card-actions { margin-top: auto; }
+.card-actions { margin-top: auto; display: flex; gap: 8px; }
 
 .btn {
   width: 100%;
@@ -165,8 +166,16 @@ main { padding: 28px; }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn:disabled { opacity: 0.6; cursor: default; }
 
+.card-actions .btn { width: auto; flex: 1; }
+
 .btn-primary { background: var(--accent); color: white; }
 .btn-secondary { background: var(--card-border); color: var(--muted); }
+.btn-danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.btn-danger:hover { background: rgba(224, 93, 93, 0.12); }
 
 .card.skeleton {
   min-height: 140px;

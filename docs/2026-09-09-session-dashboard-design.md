@@ -65,8 +65,11 @@ A small local web dashboard, launched on demand, that:
    Portability below.
 
 Explicitly out of scope: reimplementing `claude agents` itself, remote/network
-access (this is a single-user localhost tool), authentication, editing or
-deleting sessions, showing full transcripts.
+access (this is a single-user localhost tool), authentication, editing
+sessions, showing full transcripts. (Purging a confirmed-dead session — see
+`POST /api/purge` below, added 2026-09-09 — is now in scope; it was
+originally excluded here alongside "editing," but real use surfaced a
+genuine need to declutter old/no-longer-wanted sessions.)
 
 ## Portability (native install vs. Docker)
 
@@ -149,9 +152,10 @@ static files from the same server).
    own `cwd` and `gitBranch` fields are read from a small prefix read (no
    need to tail-read or decode the folder name), along with its file size.
 2. Reads every `<SESSIONS_ROOT>\sessions\*.json` (deduplicated by `name`,
-   keeping the entry with the latest `updatedAt`) and overlays a saved
-   `name` onto any transcript-discovered session with a matching
-   `sessionId`. Without a saved name, the session falls back to a name
+   keeping the entry with the latest `updatedAt`) and overlays its `name`,
+   `id`/`jobId`, `kind`, and `status` onto any transcript-discovered
+   session with a matching `sessionId`, when present. Without a saved
+   name, the session falls back to a name
    derived from its own preview text (see step 4), then the last path
    segment of `cwd`, then a short slice of its id — never Claude's own
    LLM-generated conversation titles (visible in `claude --resume`'s
@@ -173,6 +177,14 @@ static files from the same server).
    `gitBranch` and `sizeBytes` per session (`null` for a live session
    whose transcript hasn't been discovered yet) and `liveUnknown` as
    before.
+
+**Known scaling ceiling, not yet mitigated:** every 5s poll re-scans and
+re-stats every `.jsonl` under `projects/*` (step 1) and re-reads a preview
+tail for every session inside the 7-day window (step 4) — there is no
+caching between polls. Fine at this project's real scale today (dozens of
+files, low-single-digit MB each); worth revisiting with a cache keyed by
+file mtime if `projects/` ever grows into the thousands of files or
+individual transcripts into the tens of MB.
 
 ### `POST /api/resume`
 Body: `{ "sessionId": "<the session's id>" }` — **nothing else from the
@@ -263,6 +275,45 @@ allowed, matching how a purely local tool should behave). `POST
 which forces a CORS preflight for any cross-origin caller and gives the
 `Origin` check a chance to run before the browser would otherwise treat
 the request as "simple."
+
+### `POST /api/purge` (added 2026-09-09)
+
+Body: `{ "sessionId": "<the session's id>" }` — same server-side
+resolve-by-id pattern as `POST /api/resume`; nothing else from the body is
+trusted.
+
+**Purges by moving to a trash folder, never a real delete.** Moves the
+session's transcript (and its companion directory, if Claude Code created
+one alongside the `.jsonl`) from `<SESSIONS_ROOT>\projects\<encoded-cwd>\`
+into `<SESSIONS_ROOT>\.resumeragent-trash\<encoded-cwd>\` — an
+`fs.rename`, not a delete. This is deliberately reversible: move the
+folder back to undo it, or empty `.resumeragent-trash` yourself once
+you're sure. The session disappears from the dashboard immediately (the
+next discovery scan no longer finds it under `projects/`), which is the
+actual goal — decluttering — without the risk of an irreversible mistake.
+See `lib/purgeSession.mjs`.
+
+**Safety, stricter than resume, not looser:** resuming allows one narrow
+exception for live sessions (`kind === 'background'` with an `id` —
+`claude attach`, a view, never a resume). Purging has no such exception —
+`session.liveUnknown || session.live` is refused outright, full stop,
+regardless of kind. There is no safe analog to "attach" for moving a
+session's files out from under it, so this check doesn't need to be an
+allowlist of exceptions; it's a flat refusal of anything not confirmed
+dead. Same `409` (liveness unknown) vs `400` (confirmed live) distinction
+as the resume guard.
+
+**Client-side confirmation:** a "Delete" button appears only on cards
+that are confirmed dead (mirrors the server's own gate — never rendered
+at all for a live or liveUnknown session, not just disabled). Requires
+two clicks: the first arms a 5-second confirmation window and relabels the
+button "Click again to confirm"; a second click within that window
+actually fires the request. The button is briefly disabled right after
+the first click so a fast accidental double-click can't land both clicks
+before a person could realistically react to the label change. This was
+a deliberate choice over a type-the-name confirmation, made explicitly by
+the user weighing convenience against the (already well-mitigated, given
+the trash-not-delete model) risk of a mistaken purge.
 
 ## UI/UX
 

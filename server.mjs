@@ -8,9 +8,10 @@ import { loadConfig } from './lib/config.mjs';
 import { discoverSessions } from './lib/discoverSessions.mjs';
 import { readSessionRegistry } from './lib/sessionRegistry.mjs';
 import { readLiveAgents } from './lib/liveAgents.mjs';
-import { readTranscriptPreview } from './lib/transcriptPreview.mjs';
+import { readTranscriptPreview, readTranscriptPreviewFromFile } from './lib/transcriptPreview.mjs';
 import { mergeSessions } from './lib/mergeSessions.mjs';
 import { buildResumeCommand } from './lib/resumeCommand.mjs';
+import { purgeSessionFiles } from './lib/purgeSession.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -38,7 +39,13 @@ async function getSessionsPayload() {
     transcriptEntries,
     registryEntries,
     liveEntries,
-    (cwd, sessionId) => readTranscriptPreview(config.sessionsRoot, cwd, sessionId)
+    // entry.filePath is set for transcript-discovered sessions (the real
+    // path discoverSessions.mjs already found them at); the live-only
+    // fallback branch in mergeSessions.mjs passes an entry with no
+    // filePath, since that session's transcript hasn't been discovered.
+    (entry) => entry.filePath
+      ? readTranscriptPreviewFromFile(entry.filePath)
+      : readTranscriptPreview(config.sessionsRoot, entry.cwd, entry.sessionId)
   );
 }
 
@@ -174,6 +181,62 @@ async function handleResume(req, res) {
   }
 }
 
+async function handlePurge(req, res) {
+  let body;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    res.writeHead(413).end('Request body too large');
+    return;
+  }
+
+  let requestBody;
+  try {
+    requestBody = JSON.parse(body);
+  } catch {
+    res.writeHead(400).end('Invalid JSON');
+    return;
+  }
+
+  if (
+    requestBody === null ||
+    typeof requestBody !== 'object' ||
+    Array.isArray(requestBody) ||
+    typeof requestBody.sessionId !== 'string'
+  ) {
+    res.writeHead(400).end('Invalid request: expected an object with sessionId');
+    return;
+  }
+
+  // Same server-side lookup pattern as /api/resume — the body's sessionId
+  // is only ever a key into our own fresh view, never a path or any other
+  // trusted field. Purging is stricter than resuming: a live background
+  // session can safely be attached to, but there is no safe reason to
+  // ever move a live session's files, so any live (or unconfirmed-dead)
+  // session is refused outright, full stop.
+  const sessions = await getSessionsPayload();
+  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
+
+  if (!session) {
+    res.writeHead(404).end('Unknown session');
+    return;
+  }
+
+  if (session.liveUnknown || session.live) {
+    res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to purge a live or unconfirmed-dead session');
+    return;
+  }
+
+  try {
+    const result = purgeSessionFiles(config.sessionsRoot, session);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, movedTo: result.movedTo }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   if (!isRequestAllowed(req)) {
     res.writeHead(403).end('Forbidden');
@@ -199,6 +262,24 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       await handleResume(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err) }));
+      } else {
+        res.end();
+      }
+    }
+    return;
+  }
+
+  if (req.url === '/api/purge' && req.method === 'POST') {
+    if (req.headers['content-type'] !== 'application/json') {
+      res.writeHead(415).end('Unsupported Content-Type');
+      return;
+    }
+    try {
+      await handlePurge(req, res);
     } catch (err) {
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
