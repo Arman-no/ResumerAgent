@@ -209,6 +209,17 @@ const server = http.createServer(async (req, res) => {
   serveStatic(req, res);
 });
 
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `ResumerAgent is already running at http://127.0.0.1:${config.port} — open that in your browser, or close the existing instance before starting another.`
+    );
+  } else {
+    console.error('Failed to start ResumerAgent:', err);
+  }
+  process.exit(1);
+});
+
 server.listen(config.port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${config.port}`;
   console.log(`ResumerAgent dashboard: ${url}`);
