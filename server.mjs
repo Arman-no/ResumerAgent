@@ -112,6 +112,33 @@ function sanitizeTitle(session) {
   return `Claude: ${safe || safeFallback || 'session'}`;
 }
 
+// This server's own process can end up running underneath a real Claude
+// Code session's process tree (during development, or if the desktop
+// shortcut is ever launched from inside an existing claude terminal) and
+// inherit environment variables that mark it as a *child* of that
+// session. Passing those straight through to a Resume/Attach spawn is
+// exactly backwards — the whole point is a genuinely independent
+// top-level session, not one that silently attaches to whatever session
+// happens to be this process's ancestor. Confirmed via a real incident: a
+// resumed session's own status bar showed the *ancestor* session's name
+// and disabled its own transcript saving, warning "inherited
+// CLAUDE_CODE_CHILD_SESSION marker." Stripping these here fixes it
+// regardless of how this server's own process was started — the leak is
+// cut at the one place it actually matters, rather than depending on
+// launch conditions.
+const CHILD_SESSION_ENV_KEYS = [
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+];
+
+function envForResumeSpawn() {
+  const env = { ...process.env };
+  for (const key of CHILD_SESSION_ENV_KEYS) delete env[key];
+  return env;
+}
+
 // A live session is only ever actioned if it's a background job with a
 // real id (claude attach <id> — a view, never a resume). Everything else
 // live — interactive, or background missing its id — is refused. This is
@@ -199,6 +226,7 @@ async function handleResume(req, res) {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
+      env: envForResumeSpawn(),
     })
       .on('error', (err) => console.error('Failed to spawn resume terminal:', err))
       .unref();
