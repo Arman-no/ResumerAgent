@@ -113,7 +113,7 @@ colleague-specific and unknown at design time.
 ```
 ResumerAgent/                 (git repo root)
   README.md
-  package.json                pnpm, "start" script
+  package.json                npm, "start"/"launch" scripts
   .gitignore                   node_modules, .env
   .env.example                 documents SESSIONS_ROOT / RESUME_COMMAND / ATTACH_COMMAND / PORT
   server.mjs                   Node http server (no framework, uses node:http)
@@ -133,7 +133,7 @@ ResumerAgent/                 (git repo root)
     2026-09-09-session-dashboard-design.md   (this file)
 ```
 
-**Launch:** `pnpm start` starts an HTTP server bound to `127.0.0.1:<port>`
+**Launch:** `npm start` starts an HTTP server bound to `127.0.0.1:<port>`
 (e.g. 4317) and opens the default browser to it. `Ctrl+C` stops it. Nothing
 runs when not in use — on-demand launch model.
 
@@ -167,9 +167,15 @@ looking at current code:
    this only prevents the failure mode going forward, one reload after
    deploying it is unavoidable.
 
-**Package manager:** pnpm via Corepack (`corepack enable`, bundled with
-Node). No dependencies are strictly required (`node:http`,
-`node:child_process`, `node:fs`); anything added later goes through pnpm.
+**Package manager:** plain npm (ships with Node). No dependencies are
+strictly required (`node:http`, `node:child_process`, `node:fs`).
+**Revision (2026-09-09):** originally documented as pnpm via Corepack, but
+real use on a corporate-managed Windows machine hit `corepack`'s pnpm
+install being blocked outright — `This program is blocked by group policy`
+— an IT-managed AppLocker/WDAC-style restriction on running an unsigned
+native binary, not fixable from this project. Since there's nothing to
+install anyway, npm is the documented path now; pnpm still works for
+anyone whose machine allows it.
 
 ### `GET /`
 Serves `public/index.html` (which pulls in `styles.css` and `app.js` as
@@ -479,14 +485,14 @@ state on refresh.
 
 - Repo: `C:\AE\ResumerAgent`, pushed to a **private** GitHub repo (session
   previews can reference internal ticket IDs/work, so kept private).
-- Colleague usage: `git clone`, `pnpm install`, copy `.env.example` to
+- Colleague usage: `git clone`, `npm install`, copy `.env.example` to
   `.env` and adjust `SESSIONS_ROOT`/`RESUME_COMMAND` if they're not on a
-  native install with default paths, `pnpm start`. README documents this
+  native install with default paths, `npm start`. README documents this
   end to end, including the Docker override example above.
 
 ## Testing
 
-- Manual: run `pnpm start` with the current 3-4 real sessions on this
+- Manual: run `npm start` with the current 3-4 real sessions on this
   machine present; verify the dashboard lists them, preview text matches
   the last real user message, live status matches `claude agents --json`.
 - Manual: kill one live session's process, confirm it drops out of `live`
