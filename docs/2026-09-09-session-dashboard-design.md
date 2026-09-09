@@ -816,3 +816,31 @@ are absent from the child's environment while everything actually needed
 (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, etc.) still passes
 through untouched — no real session or real `claude` invocation involved
 in verifying this.
+
+**That fix alone wasn't enough.** Real use immediately after: the resumed
+session's own name changed to "MotherAgent-glittery-peacock" — not a
+display glitch, its registry pointer recorded `nameSource:"collision"`,
+meaning it derived "MotherAgent" (this project's own dev conversation) as
+its *own default name* before auto-disambiguating. `CLAUDE_JOB_DIR` and
+`CLAUDE_PID` — this project's own background-job harness identity, not
+covered by the first pass — turned out to feed that separate naming
+layer. Every remaining env var on this machine was audited by hand (one
+line at a time, `env` output) before finalizing `IDENTITY_ENV_KEYS`, both
+to make sure nothing else in the same "identifies this specific
+process's place in a hierarchy" category was missed, and to make sure
+nothing load-bearing (`AWS_PROFILE`/`AWS_REGION` — required for the
+Bedrock backend to authenticate at all — very nearly got caught by an
+earlier draft of this fix that considered switching to an allowlist
+instead) got stripped by accident. Re-verified the same way as before:
+substituted `cmd /c set` for the real command, confirmed all 6 identity
+keys absent and all load-bearing keys present in the child's environment.
+
+**The damage to that one session's own data is real and doesn't self-heal
+on its own.** The bad name got written as a genuine
+`{type:"custom-title", customTitle:"MotherAgent-glittery-peacock"}` line
+in the transcript itself (confirmed: two `custom-title` entries now exist
+in that file, the corrupted one is the most recent) — not just the
+registry pointer, which would have cleared on the next clean exit. The
+code-level cause is fixed, so this won't happen to any future resume, but
+that specific session needs one more `/rename` to correct its own name
+back.
