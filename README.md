@@ -14,17 +14,24 @@ browser, with one click to reopen a terminal on the right one.
 - **Windows only.** Resume/Attach open a new terminal via `cmd.exe`,
   hardcoded — there's no cross-platform way to configure around this, so
   this tool doesn't run usefully on macOS/Linux as-is.
-- Node.js 18+
-- pnpm (`corepack enable` if you don't have it — it ships with Node)
+- Node.js 18+ (npm ships with it — nothing else to install)
 - Claude Code CLI (`claude`) reachable on PATH for the live-session overlay
   and for the resume/attach commands themselves
+
+This project has no runtime dependencies (`node:http`, `node:fs`,
+`node:child_process` only), so plain `npm` is all it needs. `pnpm` works
+too if you have it, but isn't required — and on a corporate-managed
+Windows machine, `corepack`'s pnpm install can fail with `This program is
+blocked by group policy`, since it downloads and runs an unsigned native
+binary. That's an IT policy decision, not something to work around here;
+just use `npm`.
 
 ## Setup
 
 ```bash
-pnpm install
+npm install   # no-op: nothing to install, just confirms Node works
 cp .env.example .env   # optional — only needed if your setup isn't a default native install
-pnpm start
+npm start
 ```
 
 This starts a server on `http://127.0.0.1:4317` and opens it in your
