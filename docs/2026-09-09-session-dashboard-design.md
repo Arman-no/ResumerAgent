@@ -135,11 +135,46 @@ attach variant for live background sessions) by substituting `{cwd}`,
 input — then spawns it via
 `cmd /c start "Claude: <name>" cmd /k "<command>"`.
 
-**Known limitation:** a *live interactive* session already has an open
-terminal window somewhere; there is no OS-independent way for this tool to
-focus that existing window. The UI marks live-interactive cards as "already
-open elsewhere" with a secondary/less prominent button, rather than
-pretending it will focus the original window.
+**Hardening (added after a real incident during Task 9's fix loop — see
+below):** running `claude --resume <id>` against a session ID that is
+*already live* is not just visually confusing, it is genuinely unsafe —
+doing this against a real live session on 2026-09-09 triggered something in
+the local Claude Code daemon that tore down other unrelated live terminal
+sessions on the same machine. There is no safe reason for this tool to ever
+send that request, so it is blocked at two layers, not styled away at one:
+
+- **Server:** `POST /api/resume` rejects with `400` and does not build or
+  spawn anything if `session.live === true && session.kind === 'interactive'`.
+  This is the load-bearing check — it protects the machine even if the
+  client is bypassed, stale, or wrong.
+- **Client:** a card for a live *interactive* session renders its action
+  button fully `disabled` (no click handler attached at all — not merely
+  styled as secondary), labeled "Already open elsewhere". A live
+  *background* session still gets an enabled Attach button (`claude attach
+  <id>`), which only opens a **view** into the still-running session and
+  cannot tear anything down — that action stays safe and is unaffected by
+  this hardening. A dead session (`live: false`) still gets a fully enabled
+  Resume button — resuming a session nothing else currently holds open is
+  the tool's actual intended purpose and has no such risk.
+
+**What actually happened (for future reference):** while manually verifying
+that Task 9's resume endpoint still worked normally after fixing an
+unrelated bug, a test used a real, currently-active session's ID (instead
+of synthetic/fake test data) as the "does the happy path still work"
+check. Shortly after that request executed, two other live interactive
+terminal sessions on the machine closed and this dashboard-building
+session's own process was replaced. The exact internal mechanism inside
+Claude Code's daemon isn't fully known, but the causal chain (real resume
+of a live ID → sessions torn down moments later) is clear enough that this
+action is now treated as unsafe by design, not just by convention. Any
+future manual verification of the resume/attach endpoints — in this
+project or when extending it — must use synthetic fake IDs
+(e.g. `sessionId: "test-1234"`, a `cwd` that doesn't need to exist) for
+anything that actually spawns a process. A dead-but-real session is
+*closer* to safe than a live one, but "fake data, verify the command
+string, don't actually need to trigger a real spawn to prove the logic is
+correct" is the preferred method going forward — it gives full confidence
+in the code path with zero risk to anything real.
 
 ## UI/UX
 
@@ -162,7 +197,10 @@ Goal: a small tool that feels deliberately designed, not a debug page.
   per session: name (bold), status pill, `cwd` in monospace
   (ellipsis-truncated, full path on hover), relative last-active time,
   italic one-line preview (2-line clamp), kind badge, primary action button
-  (Resume/Attach), secondary Stop button only on live background sessions.
+  (Resume for dead sessions / Attach for live background sessions /
+  disabled "Already open elsewhere" for live interactive sessions — see
+  Hardening under `POST /api/resume`), secondary Stop button only on live
+  background sessions.
 
 **Motion** (respecting `prefers-reduced-motion: reduce`)
 - Cards fade + slide up on load, staggered ~30ms per card.
@@ -192,6 +230,18 @@ state on refresh.
   the one whitelisted `cmd /k` pattern with fields sourced from its own
   `/api/sessions` output — no arbitrary command execution from frontend
   input.
+- Any free-text field from the request body (e.g. `name`) that ends up in
+  a string later re-parsed by `cmd.exe` (the spawned window's title) is
+  sanitized to `[A-Za-z0-9 _.-]` before use — `cmd.exe /c` re-parses its
+  whole command line for its own metacharacters, so Node's argv quoting
+  alone does not neutralize them.
+- `/api/resume` rejects (`400`) any request whose `session.live === true
+  && session.kind === 'interactive'` before building or spawning anything
+  — see the Hardening note under `POST /api/resume` above.
+- The server never crashes the whole process on a malformed or
+  wrong-shaped request body; `/api/resume` validates the parsed body is a
+  non-null object with the required fields before use, and wraps the rest
+  of its logic in try/catch.
 - `.env` (holding any machine-specific overrides) is gitignored; only
   `.env.example` (documented placeholders, no real paths) is committed —
   relevant now that this is a shared repo, not a personal script.
@@ -209,9 +259,17 @@ state on refresh.
 
 - Manual: run `pnpm start` with the current 3-4 real sessions on this
   machine present; verify the dashboard lists them, preview text matches
-  the last real user message, live status matches `claude agents --json`,
-  and clicking Resume/Attach opens a correctly targeted terminal.
+  the last real user message, live status matches `claude agents --json`.
 - Manual: kill one live session's process, confirm it drops out of `live`
   but keeps showing as `resumable`.
+- **Rule for verifying anything that spawns a process (Resume/Attach):
+  always use synthetic fake session data** (a made-up `sessionId` such as
+  `"test-1234"`, a `cwd` that need not exist) — never a real session's ID,
+  live or dead. Confirm the built command string and that a terminal
+  opens; there is no need to target a real session to prove the plumbing
+  works, and doing so risks real side effects (see the Hardening note
+  under `POST /api/resume`). This rule binds every task and every future
+  change to this project, not just Task 9.
 - No automated test suite — single-user local utility; manual verification
-  against real session data is the right bar.
+  against synthetic/read-only data (never a live spawn against a real
+  session) is the right bar.
