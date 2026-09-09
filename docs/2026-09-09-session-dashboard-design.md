@@ -844,3 +844,63 @@ registry pointer, which would have cleared on the next clean exit. The
 code-level cause is fixed, so this won't happen to any future resume, but
 that specific session needs one more `/rename` to correct its own name
 back.
+
+## Revision (2026-09-09): the real root cause was process ancestry, not env vars — and it hit a live, unrelated session
+
+**The env-var fixes above were real and necessary, but not sufficient.**
+Immediately after both were live, resuming the same test session renamed
+a completely different, actively-in-use session — this project's own
+development conversation — via the identical `nameSource:"collision"`
+mechanism. Confirmed directly, not guessed: its registry pointer recorded
+`formerNames:[{"name":"MotherAgent", "until":...}]` and its own transcript
+gained new `custom-title`/`agent-name` entries for the collision name.
+No conversation data was lost — this is a metadata/display-name mutation
+only, confirmed by checking the transcript file's size and tail directly
+— but it's a categorically worse failure mode than the first two: this
+time it reached a session that was never part of the Resume/Attach spawn
+chain at all.
+
+**Root cause, confirmed via `Get-CimInstance Win32_Process` ancestry
+walk, not inferred:** the ResumerAgent server process in use throughout
+this development session was itself a direct descendant of this
+project's own Claude Code conversation, because it was (repeatedly)
+launched via that conversation's own Bash tool rather than the real
+desktop shortcut. Tracing the running server's PID up through its parent
+chain landed, within two hops, on a `bash.exe` process running this
+exact conversation's own tool-call command. Whatever tracks "which job
+does this process belong to" for the purposes of the
+name-collision/auto-naming system appears to do so via **OS-level
+process ancestry**, not environment variables — which is a mechanism no
+amount of env-stripping in `server.mjs`/`lib/cleanEnv.mjs` can address,
+because it isn't reading those variables at all for this purpose.
+
+**No code fix for this in the repo** — there isn't one available that
+doesn't require guessing at closed internals this project has no
+visibility into. The actual fix is procedural: **the ResumerAgent server
+must be launched from a process tree with no ancestor Claude Code
+session** — i.e., the real desktop shortcut, double-clicked from
+Explorer, never relaunched via any `claude` session's own tool calls
+during development or testing. Every previous "verified working" claim
+in this doc that involved relaunching the server via Bash to test a fix
+was run against a contaminated process tree; the underlying code changes
+being verified were still real and correct, but the process-ancestry
+contamination itself was invisible to that testing method by
+construction — the same tool doing the testing was the contamination
+source.
+
+**Applied anyway, as real and independently justified hardening:** a
+code review of the CLAUDE_JOB_DIR/CLAUDE_PID fix flagged that
+`lib/liveAgents.mjs`'s `claude agents --json --all` call also inherited
+an unstripped environment, and its output is exactly what
+`canSafelyAct()` gates Resume/Attach/Purge safety decisions on. The
+env-stripping logic was extracted to `lib/cleanEnv.mjs` (shared by both
+`server.mjs` and `liveAgents.mjs` now, rather than duplicated) and
+applied to that call too. This does not address the process-ancestry
+mechanism above, but closes a real, separate gap: the same ambient
+identity variables reaching a safety-relevant data source, independent
+of whether process ancestry is also involved. Verified by calling
+`readLiveAgents()` directly (a read-only status query — this project's
+own dashboard has called the identical underlying command every 5
+seconds for hours with no side effects) rather than through a full
+server relaunch, specifically to avoid re-contaminating the process tree
+while verifying the fix.
