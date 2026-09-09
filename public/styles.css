@@ -32,8 +32,48 @@ body {
 }
 
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 600; }
+.topbar-brand { display: flex; align-items: center; gap: 10px; }
 .topbar-actions { display: flex; align-items: center; gap: 12px; }
 .muted { color: var(--muted); font-size: 13px; }
+
+/* A small proof-of-life: pulses on its own, and rings out on every
+   successful poll (see app.js pulseHeartbeat) — a genuinely "live"
+   dashboard should look like one is actually running, not just claim to. */
+.heartbeat {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+}
+.heartbeat::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--green);
+  animation: heartbeat-idle 2.4s ease-in-out infinite;
+}
+.heartbeat::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px solid var(--green);
+  opacity: 0;
+}
+.heartbeat.ping::after {
+  animation: heartbeat-ring 700ms ease-out;
+}
+@keyframes heartbeat-idle {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+@keyframes heartbeat-ring {
+  from { opacity: 0.8; transform: scale(1); }
+  to { opacity: 0; transform: scale(2.8); }
+}
 
 .icon-btn {
   background: none;
@@ -53,6 +93,9 @@ body {
 .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .icon-btn:disabled { opacity: 0.6; cursor: default; }
 .icon-btn svg { display: block; }
+
+.refresh-icon { transition: transform 400ms ease-out; }
+.refresh-icon.spinning { animation: spin 700ms linear infinite; }
 
 .icon-btn-danger {
   color: var(--danger);
@@ -121,11 +164,17 @@ body {
   padding: 5px 12px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out;
 }
-.chip:hover { border-color: var(--accent); }
+.chip:hover { border-color: var(--accent); transform: translateY(-1px); }
+.chip:active { transform: scale(0.96); }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.chip.active { background: var(--accent); color: white; border-color: var(--accent); }
+.chip.active { background: var(--accent); color: white; border-color: var(--accent); animation: chip-pop 200ms ease-out; }
+@keyframes chip-pop {
+  0% { transform: scale(0.9); }
+  60% { transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
 
 .filter-check {
   display: flex;
@@ -135,6 +184,13 @@ body {
   cursor: pointer;
 }
 .filter-check input { accent-color: var(--accent); width: 14px; height: 14px; flex-shrink: 0; }
+
+.filter-check-all {
+  font-weight: 600;
+  padding-bottom: 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
 
 .link-btn {
   background: none;
@@ -159,6 +215,13 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   min-height: 18px;
 }
 
+#result-count.pop { animation: count-pop 250ms ease-out; }
+@keyframes count-pop {
+  0% { transform: scale(1); opacity: 0.6; }
+  40% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
 .sort-control { display: flex; align-items: center; gap: 6px; }
 .sort-control select {
   background: var(--surface);
@@ -173,16 +236,40 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .session-list { display: flex; flex-direction: column; }
 
 .session-row {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  padding: 14px 6px;
+  padding: 14px 6px 14px 14px;
   border-bottom: 1px solid var(--border);
   animation: row-enter 200ms ease-out both;
-  transition: background 150ms ease-out;
+  transition: background 150ms ease-out, opacity 150ms ease-out, transform 150ms ease-out;
 }
-.session-row:hover { background: rgba(255, 255, 255, 0.03); }
+.session-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transition: transform 150ms ease-out;
+}
+.session-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+  transform: translateX(2px);
+}
+.session-row:hover::before { transform: scaleY(1); }
 .session-row:last-child { border-bottom: none; }
+
+/* A session retired in favor of a newer, same-named one — visually
+   de-emphasized so it reads at a glance as "old", separate from the
+   text-level "moved to a newer session" status. Still fully interactive
+   on hover (purge is deliberately still allowed on these). */
+.session-row.superseded-row { opacity: 0.55; }
+.session-row.superseded-row:hover { opacity: 0.85; }
 
 @keyframes row-enter {
   from { opacity: 0; transform: translateY(4px); }
@@ -263,8 +350,15 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .status-busy { color: var(--blue); background: rgba(91, 141, 239, 0.12); }
 .status-waiting { color: var(--amber); background: rgba(224, 167, 64, 0.12); }
 .status-resumable { color: var(--gray); background: rgba(91, 98, 112, 0.15); }
+.status-superseded { color: var(--gray); background: rgba(91, 98, 112, 0.15); font-style: italic; }
+/* A session we've independently confirmed is still running (its registry
+   pid checks out against the OS process table) even though claude agents
+   never reported it — genuinely different information than "we have no
+   idea," so it gets its own color/motion, not the same flat gray as plain
+   "status unknown." */
+.status-external { color: var(--amber); background: rgba(224, 167, 64, 0.12); }
 
-.status-idle::before, .status-busy::before, .status-waiting::before {
+.status-idle::before, .status-busy::before, .status-waiting::before, .status-external::before {
   animation: pulse 2s ease-in-out infinite;
 }
 @keyframes pulse {
@@ -293,9 +387,11 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .status-idle::before, .status-busy::before, .status-waiting::before { animation: none; }
-  .session-row { animation: none; }
-  .shake, .btn-icon-spinner { animation: none; }
+  .status-idle::before, .status-busy::before, .status-waiting::before, .status-external::before { animation: none; }
+  .session-row { animation: none; transition: none; }
+  .session-row:hover { transform: none; }
+  .shake, .btn-icon-spinner, .refresh-icon.spinning, .chip.active, #result-count.pop { animation: none; }
+  .heartbeat::before, .heartbeat.ping::after { animation: none; }
 }
 
 .badge {
@@ -320,6 +416,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 
 .btn-primary { background: var(--accent); color: white; }
 .btn-secondary { background: var(--border); color: var(--muted); }
+.btn-flash-success { background: var(--green) !important; transition: background 200ms ease-out; }
 
 .session-row.skeleton {
   min-height: 60px;
@@ -375,13 +472,20 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   position: fixed;
   bottom: 24px;
   left: 50%;
-  transform: translateX(-50%);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 16px;
   font-size: 13px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+  pointer-events: none;
+}
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 @media (max-width: 760px) {

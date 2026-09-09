@@ -7,10 +7,18 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>ResumerAgent</h1>
+    <div class="topbar-brand">
+      <span class="heartbeat" id="heartbeat" title="Live — polls every 5s"></span>
+      <h1>ResumerAgent</h1>
+    </div>
     <div class="topbar-actions">
       <span id="last-refreshed" class="muted"></span>
-      <button id="refresh-btn" class="icon-btn" title="Refresh now">⟳</button>
+      <button id="refresh-btn" class="icon-btn" title="Refresh now">
+        <svg class="refresh-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+          <path d="M21 3v6h-6" />
+        </svg>
+      </button>
       <button id="shutdown-btn" class="icon-btn icon-btn-danger" title="Shut down ResumerAgent">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <path d="M12 3v8" />
@@ -38,6 +46,10 @@
 
       <fieldset class="filter-group">
         <legend class="filter-label">Status</legend>
+        <label class="filter-check filter-check-all">
+          <input type="checkbox" id="status-all" checked />
+          <span>All</span>
+        </label>
         <label class="filter-check">
           <input type="checkbox" data-status="live" checked />
           <span class="pill status-idle" style="pointer-events:none">live</span>
@@ -81,7 +93,7 @@
     </main>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast"></div>
 
   <script src="/app.js"></script>
 </body>

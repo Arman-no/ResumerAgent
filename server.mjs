@@ -121,6 +121,11 @@ function sanitizeTitle(session) {
 // refused unconditionally, before this check even runs.
 function canSafelyAct(session) {
   if (session.liveUnknown) return false;
+  // Not a safety guard the way liveUnknown is — resuming an old, renamed-
+  // away-from session can't hurt anything. Refused anyway because the
+  // whole point of the feature is "don't keep growing this transcript,"
+  // and Resume is exactly the action that would do that.
+  if (session.superseded) return false;
   if (!session.live) return true;
   return session.kind === 'background' && typeof session.id === 'string' && session.id.length > 0;
 }
