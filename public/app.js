@@ -115,6 +115,11 @@ function renderSkeleton() {
 }
 
 function renderSessions(sessions) {
+  // renderSkeleton() appends placeholder cards directly to #grid without
+  // registering them in cardsByKey, since they represent no real session.
+  // Clear them here so they don't linger after the first successful load.
+  grid.querySelectorAll('.skeleton').forEach((el) => el.remove());
+
   emptyEl.classList.toggle('hidden', sessions.length > 0);
 
   const seenKeys = new Set();
