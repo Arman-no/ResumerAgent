@@ -619,3 +619,70 @@ Verified end-to-end against a synthetic fake session ID (never a real one,
 per the testing rule above) — confirmed via `Get-CimInstance Win32_Process`
 that `claude.exe` actually launched with the correct command line and
 working directory.
+
+## Revision (2026-09-09): a real near-incident — claude agents isn't exhaustive
+
+Real use surfaced a second, more serious gap than the one above: a
+"resumable" session's Resume button was genuinely clickable, and clicking
+it spawned `claude --resume` against a transcript whose original process
+was still alive — the new window ended up showing that live session's own
+real-time terminal content. This is exactly the incident class the
+existing `liveUnknown`/fail-closed design was built to prevent, and it
+happened because the design's *input* was wrong, not its logic.
+
+**Root cause, chased down via `Get-CimInstance Win32_Process`, not
+guessed:** the current conversation this tool was being tested from
+(`686b4a0f-...`) had itself been launched with `--fork-session --resume
+<...2d5f121e....jsonl>` — i.e. it's a fork continuing an older session
+(`2d5f121e-...`) whose own original process (PID 39252) was confirmed
+still running (`tasklist`). `claude agents --json --all` — this tool's
+*only* liveness source — never listed that PID at all, not stale, just
+absent. `readLiveAgents.mjs` has no way to know what it was never told.
+
+**A second, compounding bug hid the evidence:** `lib/sessionRegistry.mjs`
+deduplicated registry pointer files **by `name`**, not `sessionId`. Two
+independently-running sessions on this machine happen to share the name
+"MotherAgent" (`2d5f121e-...` and `686b4a0f-...`) — deduping by name
+silently dropped the older one's entire registry entry, including its
+`pid`, in favor of the newer one's. This is also why it displayed as "No
+Name" instead of "MotherAgent": its own registry entry was never reachable
+by its own `sessionId` in the first place. Fixed by deduping by `sessionId`
+instead — the actual join key every consumer uses, and the correct fix for
+what dedup was presumably for in the first place (collapsing multiple
+stale pid-files left behind by repeatedly resuming the *same* session, not
+collapsing unrelated sessions that happen to share a display name).
+
+**The actual safety fix:** `claude agents` cannot be the sole source of
+truth for liveness after this. `lib/mergeSessions.mjs` now cross-checks
+independently: for any session `claude agents` didn't call live, if its
+registry pointer's own recorded `pid` is still a real running OS process
+(`process.kill(pid, 0)` — works as an existence check on Windows too, no
+signal actually sent), the session is forced to `liveUnknown: true`
+regardless of what `claude agents` reported or omitted. `liveUnknown`
+already refuses Resume/Attach unconditionally on both the client and the
+server (`canSafelyAct`) — this just makes sure a session claude agents
+missed actually reaches that guard instead of slipping past it as
+plain "resumable." Verified against the real session above: `liveUnknown`
+flips to `true`, `name` correctly shows "MotherAgent" again, and
+`POST /api/resume` now returns `409 Refusing to act on this session`.
+
+## Revision (2026-09-09): every-poll flash, and recap previews
+
+- **The whole list visibly flashed every ~5s poll.** `renderSessions()`
+  called `renderRow()` (a full `innerHTML` rebuild) for every visible row
+  on every poll, unconditionally, even when nothing about that session had
+  changed. Fixed with a per-row signature (`JSON.stringify(session)`,
+  cached in `rowSignatures`): a row is only fully rebuilt when its
+  signature actually changes. The "X ago" text still needs to advance
+  every poll regardless of whether anything else changed, so it's updated
+  directly (`row.querySelector('.row-when').textContent = ...`) without
+  triggering a full rebuild.
+- **Previews now prefer Claude Code's own recap over the last raw typed
+  message.** Claude Code writes an end-of-turn summary as
+  `{type:"system", subtype:"away_summary", content:"..."}` in the
+  transcript — a purpose-written summary of what happened, strictly more
+  useful than whatever the user happened to type (which can be as bare as
+  "check spot1"). `lib/transcriptPreview.mjs`'s existing backward scan now
+  also recognizes this line type; since a recap is normally written after
+  its triggering message, checking both in the same backward-from-the-end
+  scan naturally prefers whichever is more recent.
