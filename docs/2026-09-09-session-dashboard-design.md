@@ -20,12 +20,32 @@ terminal windows is which" today; nothing needs to be built for it.
 The gap, confirmed by comparing `claude agents --json` against
 `claude agents --json --all`: once an **interactive** session's process is
 gone, it disappears from `claude agents` entirely (`--all` only restores
-completed **background** jobs). The only surviving trace of a dead
-interactive session is a per-process registry file at
-`<config-root>\sessions\<pid>.json` (confirmed one 6+ days old is still
-present and untouched on this machine), containing its `name`, `sessionId`,
-`cwd`, and status/timestamps — everything needed to resume it, just nothing
-to browse it with.
+completed **background** jobs).
+
+**Revision (2026-09-09, after real usage found the original approach didn't
+work): the per-process registry file is not a durable record of dead
+sessions.** The original design read `<config-root>\sessions\<pid>.json` as
+the source of dead sessions, based on one observed case where a file from
+an *ungracefully*-ended session (crash / force-kill / daemon takeover) was
+still present 6+ days later. In real use, a normal clean exit (closing the
+terminal window, typing `exit`) deletes that pointer file essentially
+immediately — confirmed directly: closing a session's window made it
+vanish from the registry within moments, while its actual transcript
+under `projects/<encoded-cwd>/<sessionId>.jsonl` remained fully intact.
+This is exactly backwards from what the tool needs: the pointer survives
+the rare case (a crash) and disappears in the common case (closing a
+terminal normally) — precisely the sessions this tool exists to recover.
+
+**Fixed by scanning transcripts directly, not the pointer file.**
+`claude --resume`'s own interactive picker (`Ctrl+A` to show all projects)
+confirms transcripts are the right source — sessions with no surviving
+registry pointer still show up there, with `cwd`, git branch, and file
+size alongside a name. Each transcript line already embeds its own `cwd`
+and `gitBranch`, so recovering these needs no lossy reverse-engineering of
+the encoded folder name — see `lib/discoverSessions.mjs`. The registry
+file is now only consulted afterward, to overlay a nicer name when Claude
+Code happened to record one; it is no longer the primary source of dead
+sessions.
 
 ## Goal
 
@@ -45,13 +65,41 @@ A small local web dashboard, launched on demand, that:
    Portability below.
 
 Explicitly out of scope: reimplementing `claude agents` itself, remote/network
-access (this is a single-user localhost tool), authentication, editing or
-deleting sessions, showing full transcripts.
+access (this is a single-user localhost tool), authentication, editing
+sessions, showing full transcripts. (Purging a confirmed-dead session — see
+`POST /api/purge` below, added 2026-09-09 — is now in scope; it was
+originally excluded here alongside "editing," but real use surfaced a
+genuine need to declutter old/no-longer-wanted sessions.)
 
 ## Portability (native install vs. Docker)
 
 This machine's native install sets `CLAUDE_CONFIG_DIR=C:\AE\claude-work`
-(confirmed via env var), which is where `sessions/` and `projects/` live. A
+(confirmed via env var), which is where `sessions/` and `projects/` live.
+**Revision (2026-09-09): that "confirmed via env var" was checked from
+inside a Claude Code session, which is not the same environment the
+desktop shortcut runs in.** Real use surfaced this the hard way: the
+dashboard was showing 10 sessions when launched however this project's own
+testing did it all day, then dropped to 2 (both live, both found only via
+the `claude agents` live overlay, zero found via transcript scan) the
+moment the user used the actual desktop shortcut. Root cause —
+`CLAUDE_CONFIG_DIR` is not a real, persisted Windows environment variable
+on this machine (confirmed via `[Environment]::GetEnvironmentVariable(...,
+'User')` / `'Machine'`, both empty); it's only present inside whatever
+process tree a Claude Code session's own harness sets it for. A plain
+`explorer.exe`-launched `cmd.exe` (i.e. double-clicking the shortcut) never
+inherits it, so `lib/config.mjs` silently fell back to `~/.claude` — a
+real but stale, mostly-empty directory (old `sessions/`, different/older
+`projects/`) — with no error, just a much smaller, wrong session list.
+**Fixed by no longer relying on that fallback at all**: an explicit `.env`
+at the repo root (gitignored, per its existing purpose) now sets
+`SESSIONS_ROOT=C:\AE\claude-work` directly. Verified by relaunching with
+`CLAUDE_CONFIG_DIR` deliberately unset — session count is correct (10)
+either way once `SESSIONS_ROOT` is explicit. The lesson: never trust an
+env-var check done from inside an agent session as representative of how
+a real, independently-launched process (a shortcut, a scheduled task, a
+service) will actually see the environment — the two process trees are
+not guaranteed to share anything beyond what's persisted at the OS level.
+A
 colleague running Claude Code through Docker will have a different, unknown
 layout: their session/transcript files live inside the container's
 filesystem, and are only visible on their host if their container setup
@@ -68,10 +116,21 @@ native case:
   mounts that directory to.
 - `RESUME_COMMAND` — a template for the command spawned on Resume/Attach,
   with `{cwd}` and `{sessionId}`/`{id}` placeholders. Default:
-  `cd /d "{cwd}" && claude --resume {sessionId}` (and `claude attach {id}`
-  for live background). A Docker user overrides this to whatever invokes
-  their container's `claude` equivalent, e.g.
+  `claude --resume {sessionId}` (and `claude attach {id}` for live
+  background). A Docker user overrides this to whatever invokes their
+  container's `claude` equivalent, e.g.
   `docker exec -it my-claude-container claude --resume {sessionId}`.
+  **Revision (2026-09-09):** the default used to be
+  `cd /d "{cwd}" && claude --resume {sessionId}`, with the working
+  directory baked into the template string. Real use hit a "filename,
+  directory name, or volume label syntax is incorrect" failure on every
+  resume — root cause was that this string gets spawned through three
+  nested layers of cmd.exe parsing (`start`, then a nested `cmd /k`), and
+  `&&`/quote characters get mis-parsed by one layer or another regardless
+  of how the string is escaped. Fixed by dropping the `cd /d` prefix
+  entirely and setting the working directory via the spawned process's own
+  `cwd` option instead (server.mjs), which `start` then inherits for the
+  new window — see the comment in lib/config.mjs for the full explanation.
 
 Both are read from environment variables, with an optional `.env` file at
 the repo root (gitignored, loaded by `lib/config.mjs` itself — no
@@ -90,7 +149,7 @@ colleague-specific and unknown at design time.
 ```
 ResumerAgent/                 (git repo root)
   README.md
-  package.json                pnpm, "start" script
+  package.json                npm, "start"/"launch" scripts
   .gitignore                   node_modules, .env
   .env.example                 documents SESSIONS_ROOT / RESUME_COMMAND / ATTACH_COMMAND / PORT
   server.mjs                   Node http server (no framework, uses node:http)
@@ -110,31 +169,94 @@ ResumerAgent/                 (git repo root)
     2026-09-09-session-dashboard-design.md   (this file)
 ```
 
-**Launch:** `pnpm start` starts an HTTP server bound to `127.0.0.1:<port>`
+**Launch:** `npm start` starts an HTTP server bound to `127.0.0.1:<port>`
 (e.g. 4317) and opens the default browser to it. `Ctrl+C` stops it. Nothing
 runs when not in use — on-demand launch model.
 
-**Package manager:** pnpm via Corepack (`corepack enable`, bundled with
-Node). No dependencies are strictly required (`node:http`,
-`node:child_process`, `node:fs`); anything added later goes through pnpm.
+**Revision (2026-09-09, freshness fixes):** two related "why doesn't it show
+my changes" gaps, both stemming from nothing guaranteeing the user is
+looking at current code:
+1. **Stale server process.** The desktop shortcut previously ran `npm start`
+   directly. If a prior instance was still bound to the port (never closed,
+   e.g. left running from a previous session), the new process hit
+   `EADDRINUSE` and exited, leaving the user talking to whatever old code
+   the surviving process happened to be running, with no indication it was
+   outdated. Fixed by `scripts/launch.mjs` (invoked as `npm run launch`,
+   what the desktop shortcut now points at): before starting, it looks up
+   whatever process is listening on the configured port via `netstat`, and
+   if — and only if — that process is `node.exe` (never anything else, to
+   avoid touching an unrelated process that happens to hold the port), kills
+   it first. The shortcut now always ends up running the code currently on
+   disk.
+2. **Stale browser tab.** Even with a fresh server, a browser tab left open
+   from before a code change keeps running whatever `app.js` it already
+   loaded into memory — polling `/api/sessions` for new data does nothing
+   for new *rendering* code, since the tab never re-fetches its own
+   `<script>`. Fixed by stamping every `/api/sessions` response with
+   `startedAt` (the server process's boot time); `app.js` remembers the
+   value from its first successful poll and shows a persistent "reload"
+   banner the moment a later poll's value differs, i.e. the server it's
+   talking to restarted since this tab loaded. Static files (`index.html`,
+   `app.js`, `styles.css`) are also now served with `Cache-Control:
+   no-store`, so a manual reload can never be served a disk-cached stale
+   copy either. A tab that predates this fix has no way to know about it —
+   this only prevents the failure mode going forward, one reload after
+   deploying it is unavoidable.
+
+**Package manager:** plain npm (ships with Node). No dependencies are
+strictly required (`node:http`, `node:child_process`, `node:fs`).
+**Revision (2026-09-09):** originally documented as pnpm via Corepack, but
+real use on a corporate-managed Windows machine hit `corepack`'s pnpm
+install being blocked outright — `This program is blocked by group policy`
+— an IT-managed AppLocker/WDAC-style restriction on running an unsigned
+native binary, not fixable from this project. Since there's nothing to
+install anyway, npm is the documented path now; pnpm still works for
+anyone whose machine allows it.
 
 ### `GET /`
 Serves `public/index.html` (which pulls in `styles.css` and `app.js` as
 static files from the same server).
 
 ### `GET /api/sessions`
-1. Reads every `<SESSIONS_ROOT>\sessions\*.json`.
-2. Deduplicates by `name`, keeping the entry with the latest `updatedAt`.
+1. Scans `<SESSIONS_ROOT>\projects\*\*.jsonl` for every transcript modified
+   in the last 7 days — this is the primary source of sessions, dead or
+   alive (see the Problem section's revision above for why). Each file's
+   own `cwd` and `gitBranch` fields are read from a small prefix read (no
+   need to tail-read or decode the folder name), along with its file size.
+2. Reads every `<SESSIONS_ROOT>\sessions\*.json` (deduplicated by `name`,
+   keeping the entry with the latest `updatedAt`) and overlays its `name`,
+   `id`/`jobId`, `kind`, and `status` onto any transcript-discovered
+   session with a matching `sessionId`, when present. Without a saved
+   name, the session falls back to a name
+   derived from its own preview text (see step 4), then the last path
+   segment of `cwd`, then a short slice of its id — never Claude's own
+   LLM-generated conversation titles (visible in `claude --resume`'s
+   picker), which this tool has no cheap way to reproduce.
 3. Runs `claude agents --json --all` and marks any entry whose `sessionId`
    appears there as `live: true`, carrying over its live `status`
-   (idle/busy/waiting) and `kind` (interactive/background).
-4. For each session, reads the last few lines of its transcript at
-   `<SESSIONS_ROOT>\projects\<encoded-cwd>\<sessionId>.jsonl` and extracts
-   the most recent `type: "user"` message's text as a one-line preview
-   (truncated, first line only). Missing/unparsable file → preview omitted,
-   no error surfaced for this cosmetic field.
-5. Returns a JSON array, newest `updatedAt` first (shape unchanged from the
-   original design — see example in git history / README).
+   (idle/busy/waiting), `kind` (interactive/background), and `id`.
+4. For each session, reads the last few lines of its transcript and
+   extracts the most recent message that looks like something a person
+   actually typed — skipping tool/system output stored under the same
+   "user" role (`<local-command-stdout>`-style tags, bracket-wrapped
+   artifacts, the auto-compaction summary banner, a skill's own
+   invocation preamble; see `lib/transcriptPreview.mjs`'s
+   `SYNTHETIC_TEXT_PREFIXES` — a best-effort list, not exhaustive) — as a
+   one-line preview (truncated, first line only, ANSI codes stripped).
+   Missing/unparsable file, or no non-synthetic message found → preview
+   omitted, no error surfaced for this cosmetic field.
+5. Returns a JSON array, newest `updatedAt` first, now also carrying
+   `gitBranch` and `sizeBytes` per session (`null` for a live session
+   whose transcript hasn't been discovered yet) and `liveUnknown` as
+   before.
+
+**Known scaling ceiling, not yet mitigated:** every 5s poll re-scans and
+re-stats every `.jsonl` under `projects/*` (step 1) and re-reads a preview
+tail for every session inside the 7-day window (step 4) — there is no
+caching between polls. Fine at this project's real scale today (dozens of
+files, low-single-digit MB each); worth revisiting with a cache keyed by
+file mtime if `projects/` ever grows into the thousands of files or
+individual transcripts into the tens of MB.
 
 ### `POST /api/resume`
 Body: `{ "sessionId": "<the session's id>" }` — **nothing else from the
@@ -225,6 +347,45 @@ allowed, matching how a purely local tool should behave). `POST
 which forces a CORS preflight for any cross-origin caller and gives the
 `Origin` check a chance to run before the browser would otherwise treat
 the request as "simple."
+
+### `POST /api/purge` (added 2026-09-09)
+
+Body: `{ "sessionId": "<the session's id>" }` — same server-side
+resolve-by-id pattern as `POST /api/resume`; nothing else from the body is
+trusted.
+
+**Purges by moving to a trash folder, never a real delete.** Moves the
+session's transcript (and its companion directory, if Claude Code created
+one alongside the `.jsonl`) from `<SESSIONS_ROOT>\projects\<encoded-cwd>\`
+into `<SESSIONS_ROOT>\.resumeragent-trash\<encoded-cwd>\` — an
+`fs.rename`, not a delete. This is deliberately reversible: move the
+folder back to undo it, or empty `.resumeragent-trash` yourself once
+you're sure. The session disappears from the dashboard immediately (the
+next discovery scan no longer finds it under `projects/`), which is the
+actual goal — decluttering — without the risk of an irreversible mistake.
+See `lib/purgeSession.mjs`.
+
+**Safety, stricter than resume, not looser:** resuming allows one narrow
+exception for live sessions (`kind === 'background'` with an `id` —
+`claude attach`, a view, never a resume). Purging has no such exception —
+`session.liveUnknown || session.live` is refused outright, full stop,
+regardless of kind. There is no safe analog to "attach" for moving a
+session's files out from under it, so this check doesn't need to be an
+allowlist of exceptions; it's a flat refusal of anything not confirmed
+dead. Same `409` (liveness unknown) vs `400` (confirmed live) distinction
+as the resume guard.
+
+**Client-side confirmation:** a "Delete" button appears only on cards
+that are confirmed dead (mirrors the server's own gate — never rendered
+at all for a live or liveUnknown session, not just disabled). Requires
+two clicks: the first arms a 5-second confirmation window and relabels the
+button "Click again to confirm"; a second click within that window
+actually fires the request. The button is briefly disabled right after
+the first click so a fast accidental double-click can't land both clicks
+before a person could realistically react to the label change. This was
+a deliberate choice over a type-the-name confirmation, made explicitly by
+the user weighing convenience against the (already well-mitigated, given
+the trash-not-delete model) risk of a mistaken purge.
 
 ## UI/UX
 
@@ -360,14 +521,14 @@ state on refresh.
 
 - Repo: `C:\AE\ResumerAgent`, pushed to a **private** GitHub repo (session
   previews can reference internal ticket IDs/work, so kept private).
-- Colleague usage: `git clone`, `pnpm install`, copy `.env.example` to
+- Colleague usage: `git clone`, `npm install`, copy `.env.example` to
   `.env` and adjust `SESSIONS_ROOT`/`RESUME_COMMAND` if they're not on a
-  native install with default paths, `pnpm start`. README documents this
+  native install with default paths, `npm start`. README documents this
   end to end, including the Docker override example above.
 
 ## Testing
 
-- Manual: run `pnpm start` with the current 3-4 real sessions on this
+- Manual: run `npm start` with the current 3-4 real sessions on this
   machine present; verify the dashboard lists them, preview text matches
   the last real user message, live status matches `claude agents --json`.
 - Manual: kill one live session's process, confirm it drops out of `live`
@@ -386,3 +547,360 @@ state on refresh.
 - No automated test suite — single-user local utility; manual verification
   against synthetic/read-only data (never a live spawn against a real
   session) is the right bar.
+
+## Revision (2026-09-09): list-layout redesign follow-ups
+
+A workflow-based adversarial review of the list-layout + filter sidebar
+redesign (four dimensions, every finding independently re-verified against
+the real code) caught real, non-cosmetic bugs, all fixed:
+- DOM row order only ever grew at the end on re-render, never repositioning
+  existing rows — invisible with the old 5s-poll-only refresh, but exactly
+  the mechanism the new sort feature needs. Fixed by always
+  `appendChild`-ing every row in the desired order each render (moves an
+  already-attached node instead of duplicating it).
+- The two-click purge confirmation was silently defeated by any re-render
+  during its 5s window (a routine poll, or now any filter/sort change),
+  since `renderRow()` unconditionally clears the armed state. Fixed by
+  skipping re-render entirely for a row with an active confirm timer.
+- Filter controls were live before the first `/api/sessions` response
+  arrived, able to render an empty list on top of the loading skeleton.
+  Fixed by making `refreshView()` a no-op while `rawSessions` is still
+  `null`.
+- Accessibility: the When chips now use `role="radiogroup"`/`role="radio"`
+  + `aria-checked`; the When/Status groups are real `<fieldset>`/`<legend>`
+  pairs; `#result-count`/`#no-matches` carry `aria-live="polite"`; the
+  purge button's `aria-label` now updates alongside `title` when armed
+  (an `aria-label`, once present, fully overrides `title` for the
+  accessible name — updating only `title` was invisible to screen readers).
+- Minor code-quality cleanup: the leftover `#grid`/`grid` naming from the
+  removed card-grid layout renamed to `#session-list`/`sessionListEl`;
+  `--card-bg`/`--card-border` renamed to `--surface`/`--border` (nothing
+  card-specific uses them anymore); `resumeSession`/`purgeSession` now look
+  up their row via the existing `rowsByKey` map instead of a redundant
+  `querySelector`; `formatSize()` no longer computed twice per row.
+
+Also added in this pass:
+- **Sort control** (list toolbar, next to the result count): Newest
+  created / Oldest created / Recently active / Name (A–Z), default Newest
+  created. Purely client-side over the already-fetched `rawSessions`, same
+  as filtering — switching sort order never re-fetches. Requires
+  `createdAt` per session: `lib/discoverSessions.mjs` now also captures
+  `stat.birthtimeMs` (NTFS tracks true creation time; safe to rely on
+  since this tool is Windows-only), separate from `updatedAt`
+  (`stat.mtimeMs`, unchanged).
+- **"No Name" fallback**: a session with no registry-recorded name used to
+  fall back to its own preview text (the last real typed message) as a
+  stand-in name — which just duplicated the preview line directly below
+  it. `lib/mergeSessions.mjs` now shows literally "No Name" instead, so
+  it's obvious at a glance which sessions Claude Code never named, while
+  the preview line still carries the real context.
+
+## Revision (2026-09-09): the resume-terminal spawn bug
+
+Real use hit "The filename, directory name, or volume label syntax is
+incorrect" on every single Resume click. Root cause: the spawned command
+string (`cd /d "{cwd}" && claude --resume {sessionId}`) passed through
+three nested layers of cmd.exe parsing (this process's own `/c`, then
+`start`, then a nested `cmd /k`) via a Node `spawn()` argv array — Node
+has no escaping scheme that survives cmd.exe re-parsing `&&` and quote
+characters at every one of those layers simultaneously. Confirmed via
+isolated reproduction (`spawn('cmd.exe', ['/c', command])` alone
+reproduced the exact error) before touching any real code — see the
+comments in `lib/config.mjs` and `server.mjs` for the fix. Fixed by: (1)
+dropping the `cd /d` prefix from the default `RESUME_COMMAND`/template
+contract entirely, (2) setting the working directory via the spawned
+process's own `cwd` option instead, which `start` inherits for the new
+window, and (3) building the whole `start "title" cmd /k "command"` line
+as one pre-assembled string passed to `spawn(fullLine, {shell: true, ...})`
+rather than an argv array, since we fully control and can reason about
+every character in that one string ourselves instead of hoping Node's
+generic argv-quoting survives cmd.exe's parsing three layers deep.
+Verified end-to-end against a synthetic fake session ID (never a real one,
+per the testing rule above) — confirmed via `Get-CimInstance Win32_Process`
+that `claude.exe` actually launched with the correct command line and
+working directory.
+
+## Revision (2026-09-09): a real near-incident — claude agents isn't exhaustive
+
+Real use surfaced a second, more serious gap than the one above: a
+"resumable" session's Resume button was genuinely clickable, and clicking
+it spawned `claude --resume` against a transcript whose original process
+was still alive — the new window ended up showing that live session's own
+real-time terminal content. This is exactly the incident class the
+existing `liveUnknown`/fail-closed design was built to prevent, and it
+happened because the design's *input* was wrong, not its logic.
+
+**Root cause, chased down via `Get-CimInstance Win32_Process`, not
+guessed:** the current conversation this tool was being tested from
+(`686b4a0f-...`) had itself been launched with `--fork-session --resume
+<...2d5f121e....jsonl>` — i.e. it's a fork continuing an older session
+(`2d5f121e-...`) whose own original process (PID 39252) was confirmed
+still running (`tasklist`). `claude agents --json --all` — this tool's
+*only* liveness source — never listed that PID at all, not stale, just
+absent. `readLiveAgents.mjs` has no way to know what it was never told.
+
+**A second, compounding bug hid the evidence:** `lib/sessionRegistry.mjs`
+deduplicated registry pointer files **by `name`**, not `sessionId`. Two
+independently-running sessions on this machine happen to share the name
+"MotherAgent" (`2d5f121e-...` and `686b4a0f-...`) — deduping by name
+silently dropped the older one's entire registry entry, including its
+`pid`, in favor of the newer one's. This is also why it displayed as "No
+Name" instead of "MotherAgent": its own registry entry was never reachable
+by its own `sessionId` in the first place. Fixed by deduping by `sessionId`
+instead — the actual join key every consumer uses, and the correct fix for
+what dedup was presumably for in the first place (collapsing multiple
+stale pid-files left behind by repeatedly resuming the *same* session, not
+collapsing unrelated sessions that happen to share a display name).
+
+**The actual safety fix:** `claude agents` cannot be the sole source of
+truth for liveness after this. `lib/mergeSessions.mjs` now cross-checks
+independently: for any session `claude agents` didn't call live, if its
+registry pointer's own recorded `pid` is still a real running OS process
+(`process.kill(pid, 0)` — works as an existence check on Windows too, no
+signal actually sent), the session is forced to `liveUnknown: true`
+regardless of what `claude agents` reported or omitted. `liveUnknown`
+already refuses Resume/Attach unconditionally on both the client and the
+server (`canSafelyAct`) — this just makes sure a session claude agents
+missed actually reaches that guard instead of slipping past it as
+plain "resumable." Verified against the real session above: `liveUnknown`
+flips to `true`, `name` correctly shows "MotherAgent" again, and
+`POST /api/resume` now returns `409 Refusing to act on this session`.
+
+## Revision (2026-09-09): every-poll flash, and recap previews
+
+- **The whole list visibly flashed every ~5s poll.** `renderSessions()`
+  called `renderRow()` (a full `innerHTML` rebuild) for every visible row
+  on every poll, unconditionally, even when nothing about that session had
+  changed. Fixed with a per-row signature (`JSON.stringify(session)`,
+  cached in `rowSignatures`): a row is only fully rebuilt when its
+  signature actually changes. The "X ago" text still needs to advance
+  every poll regardless of whether anything else changed, so it's updated
+  directly (`row.querySelector('.row-when').textContent = ...`) without
+  triggering a full rebuild.
+- **Previews now prefer Claude Code's own recap over the last raw typed
+  message.** Claude Code writes an end-of-turn summary as
+  `{type:"system", subtype:"away_summary", content:"..."}` in the
+  transcript — a purpose-written summary of what happened, strictly more
+  useful than whatever the user happened to type (which can be as bare as
+  "check spot1"). `lib/transcriptPreview.mjs`'s existing backward scan now
+  also recognizes this line type; since a recap is normally written after
+  its triggering message, checking both in the same backward-from-the-end
+  scan (details continue below).
+
+## Revision (2026-09-09): the flicker fix didn't fix it, and a rename that didn't stick
+
+**The signature-skip above didn't actually stop the flash.** Real use
+confirmed it was still happening. Root cause was one line further down in
+the same function: `renderSessions()` called
+`sessionListEl.appendChild(row)` for **every** row on **every** poll,
+unconditionally — added specifically so DOM order tracks sort/filter
+order. But `appendChild` on a node that's already exactly where it
+belongs is still a real DOM mutation as far as a browser is concerned,
+and re-inserting an already-attached node retriggers its CSS
+`animation: row-enter` — on every row, every ~5s, regardless of whether
+that row's data (or the signature check) said anything had changed.
+Fixed by only calling `appendChild` when the row isn't already sitting at
+its correct index (`sessionListEl.children[index] !== row`) — a no-op
+reposition is now actually a no-op.
+
+**A session renamed via `/rename`, then closed cleanly, went back to "No
+Name."** The rename was real and had persisted — resuming the session
+manually showed the correct name again — but nowhere the *dead*-session
+path was looking. `/rename` writes `{type:"custom-title",
+customTitle:"..."}` directly into the transcript itself, which is exactly
+the thing that survives a clean exit (unlike the `sessions/*.json`
+registry pointer, deleted as always). `readTranscriptPreviewFromFile`'s
+existing backward tail-scan now also looks for this line and returns it
+alongside the preview (`{preview, customName}`); `lib/mergeSessions.mjs`
+uses it as a fallback ahead of the literal "No Name": `registryEntry?.name
+?? customName ?? NO_NAME`.
+
+**Not a bug, confirmed by checking directly:** the same real forked-from
+session (`2d5f121e-...`) from the liveness-gap fix above is still showing
+`liveUnknown`/"Status unknown" after all these fixes — because its
+original process (PID 39252, confirmed via `tasklist`) is, as of this
+revision, still genuinely running. That's the fix working correctly, not
+a regression — it stays that way for as long as that process does.
+
+## Revision (2026-09-09): clearer status text, name-collision retirement, interaction pass
+
+**"Status unknown" was drawing no distinction between two very different
+situations.** One is genuinely "we have no liveness data at all"
+(`readLiveAgents()` itself failed). The other — the `pidConfirmedAlive`
+case from the liveness-gap fix above — is "we know for a fact this is
+still running, `claude agents` just didn't report it." Real feedback:
+showing both as flat "status unknown" text buries a case we're actually
+confident about behind language that says we aren't. `pidConfirmedAlive`
+is now surfaced end to end: pill/button text says "running elsewhere"
+(amber, still pulsing — something's happening) instead of the generic gray
+"status unknown", and the resume-button label matches.
+
+**Status filter got an "All" checkbox** (native tri-state: checked, empty,
+or a dash for a mixed selection) instead of only three independent boxes
+with no way to toggle them together.
+
+**A new real workflow, planned for ahead of time rather than found as a
+bug:** a session's transcript grows large over a long life (every poll
+re-reads its tail for a preview — a real, if currently small, cost), so
+the user closes it and starts a fresh session renamed to the same name.
+Both stay discoverable — the old transcript doesn't go anywhere on its
+own — so without help, the same name would appear to duplicate itself in
+the list forever. `lib/mergeSessions.mjs` now groups sessions by name
+(`markSupersededByName`, real names only — grouping by "No Name" would
+incorrectly link every unnamed session together) and marks every
+non-live, non-liveUnknown member of a group except the most recently
+updated one `superseded: true`. A live or liveUnknown session is never
+marked superseded even if outranked by `updatedAt` — it's still doing
+something on its own, not "replaced." Superseded sessions: Resume is
+refused (client-disabled and, since the whole point is not growing that
+old transcript further via Resume, also server-refused in
+`canSafelyAct` — not a safety guard the same way `liveUnknown` is, just
+the same defense-in-depth habit), pill reads "moved to a newer session",
+row is rendered at reduced opacity, and — deliberately — Purge is still
+allowed, since these are exactly the sessions a user is most likely to
+want to clean up. Verified with a synthetic same-named pair (one file
+backdated an hour via `fs.utimesSync`, never real session data): the older
+one gets `superseded: true` and a `409`-adjacent refusal on
+`/api/resume`; the newer one doesn't.
+
+**Interaction pass** — the dashboard read as visually flat with no sense
+that it was actually alive. Added: a small heartbeat dot next to the
+brand name that idles with a slow pulse and rings out on every successful
+poll (`pulseHeartbeat()` in app.js); the refresh icon spins while a fetch
+is in flight; row hover gained a left accent bar and a slight horizontal
+lift instead of just a background tint; the result count pops when it
+actually changes (guarded the same way the row-list flicker was — only
+animates on a real change, not every poll); status/when chips pop in when
+selected; the toast now slides/fades in and out instead of an abrupt
+`hidden`-class toggle; Resume shows a held "✓ Opened" (or "✕ Failed" with
+a shake) for a beat before reverting, instead of the button changing
+state so fast it was barely visible. All of the new animations are added
+to the existing `prefers-reduced-motion: reduce` block alongside the
+originals.
+
+## Revision (2026-09-09): a resumed session inherited this project's own agent identity
+
+Real use: resuming a session showed the *wrong* session's name in its own
+status bar (this project's own agent conversation, "MotherAgent") and
+warned "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION
+marker." The same session then never showed as live in the dashboard
+either.
+
+**Root cause, confirmed directly (`env | grep CLAUDE_CODE`), not
+guessed:** this project has been developed and repeatedly re-launched
+from inside a real Claude Code agent session (this very one) via its own
+Bash tool. That shell's environment carries `CLAUDE_CODE_CHILD_SESSION=1`
+and `CLAUDE_CODE_SESSION_ID=<this-conversation's-id>` — markers that tell
+the `claude` binary "you're a child of this other session, not an
+independent one." `server.mjs`'s own process inherited those by ordinary
+child-process inheritance, and so did anything *it* spawned — including
+every Resume/Attach terminal, which is how a resumed session ended up
+thinking it was a child of this project's own dev session. This almost
+certainly also explains "not showing as running": a session `claude`
+itself considers a child of another is a reasonable thing for `claude
+agents --json --all` to leave out of its independent-agents list, which
+is exactly the blind spot the liveness-gap fix earlier in this doc was
+built to catch — but only once a registry pointer exists to cross-check.
+
+**Fixed at the one place it actually matters: the spawn boundary.**
+`server.mjs`'s `envForResumeSpawn()` copies `process.env` and deletes
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` before
+handing it to the Resume/Attach `spawn()` call. This works regardless of
+whether the server's *own* process is contaminated (it currently is, for
+the reason above) — the fix doesn't depend on a clean launch, it
+guarantees one at the exact point a new independent session is created.
+Verified directly: substituted a harmless `cmd /c set` dump for the real
+`claude` command in the exact same spawn call, confirmed the four keys
+are absent from the child's environment while everything actually needed
+(`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, etc.) still passes
+through untouched — no real session or real `claude` invocation involved
+in verifying this.
+
+**That fix alone wasn't enough.** Real use immediately after: the resumed
+session's own name changed to "MotherAgent-glittery-peacock" — not a
+display glitch, its registry pointer recorded `nameSource:"collision"`,
+meaning it derived "MotherAgent" (this project's own dev conversation) as
+its *own default name* before auto-disambiguating. `CLAUDE_JOB_DIR` and
+`CLAUDE_PID` — this project's own background-job harness identity, not
+covered by the first pass — turned out to feed that separate naming
+layer. Every remaining env var on this machine was audited by hand (one
+line at a time, `env` output) before finalizing `IDENTITY_ENV_KEYS`, both
+to make sure nothing else in the same "identifies this specific
+process's place in a hierarchy" category was missed, and to make sure
+nothing load-bearing (`AWS_PROFILE`/`AWS_REGION` — required for the
+Bedrock backend to authenticate at all — very nearly got caught by an
+earlier draft of this fix that considered switching to an allowlist
+instead) got stripped by accident. Re-verified the same way as before:
+substituted `cmd /c set` for the real command, confirmed all 6 identity
+keys absent and all load-bearing keys present in the child's environment.
+
+**The damage to that one session's own data is real and doesn't self-heal
+on its own.** The bad name got written as a genuine
+`{type:"custom-title", customTitle:"MotherAgent-glittery-peacock"}` line
+in the transcript itself (confirmed: two `custom-title` entries now exist
+in that file, the corrupted one is the most recent) — not just the
+registry pointer, which would have cleared on the next clean exit. The
+code-level cause is fixed, so this won't happen to any future resume, but
+that specific session needs one more `/rename` to correct its own name
+back.
+
+## Revision (2026-09-09): the real root cause was process ancestry, not env vars — and it hit a live, unrelated session
+
+**The env-var fixes above were real and necessary, but not sufficient.**
+Immediately after both were live, resuming the same test session renamed
+a completely different, actively-in-use session — this project's own
+development conversation — via the identical `nameSource:"collision"`
+mechanism. Confirmed directly, not guessed: its registry pointer recorded
+`formerNames:[{"name":"MotherAgent", "until":...}]` and its own transcript
+gained new `custom-title`/`agent-name` entries for the collision name.
+No conversation data was lost — this is a metadata/display-name mutation
+only, confirmed by checking the transcript file's size and tail directly
+— but it's a categorically worse failure mode than the first two: this
+time it reached a session that was never part of the Resume/Attach spawn
+chain at all.
+
+**Root cause, confirmed via `Get-CimInstance Win32_Process` ancestry
+walk, not inferred:** the ResumerAgent server process in use throughout
+this development session was itself a direct descendant of this
+project's own Claude Code conversation, because it was (repeatedly)
+launched via that conversation's own Bash tool rather than the real
+desktop shortcut. Tracing the running server's PID up through its parent
+chain landed, within two hops, on a `bash.exe` process running this
+exact conversation's own tool-call command. Whatever tracks "which job
+does this process belong to" for the purposes of the
+name-collision/auto-naming system appears to do so via **OS-level
+process ancestry**, not environment variables — which is a mechanism no
+amount of env-stripping in `server.mjs`/`lib/cleanEnv.mjs` can address,
+because it isn't reading those variables at all for this purpose.
+
+**No code fix for this in the repo** — there isn't one available that
+doesn't require guessing at closed internals this project has no
+visibility into. The actual fix is procedural: **the ResumerAgent server
+must be launched from a process tree with no ancestor Claude Code
+session** — i.e., the real desktop shortcut, double-clicked from
+Explorer, never relaunched via any `claude` session's own tool calls
+during development or testing. Every previous "verified working" claim
+in this doc that involved relaunching the server via Bash to test a fix
+was run against a contaminated process tree; the underlying code changes
+being verified were still real and correct, but the process-ancestry
+contamination itself was invisible to that testing method by
+construction — the same tool doing the testing was the contamination
+source.
+
+**Applied anyway, as real and independently justified hardening:** a
+code review of the CLAUDE_JOB_DIR/CLAUDE_PID fix flagged that
+`lib/liveAgents.mjs`'s `claude agents --json --all` call also inherited
+an unstripped environment, and its output is exactly what
+`canSafelyAct()` gates Resume/Attach/Purge safety decisions on. The
+env-stripping logic was extracted to `lib/cleanEnv.mjs` (shared by both
+`server.mjs` and `liveAgents.mjs` now, rather than duplicated) and
+applied to that call too. This does not address the process-ancestry
+mechanism above, but closes a real, separate gap: the same ambient
+identity variables reaching a safety-relevant data source, independent
+of whether process ancestry is also involved. Verified by calling
+`readLiveAgents()` directly (a read-only status query — this project's
+own dashboard has called the identical underlying command every 5
+seconds for hours with no side effects) rather than through a full
+server relaunch, specifically to avoid re-contaminating the process tree
+while verifying the fix.
