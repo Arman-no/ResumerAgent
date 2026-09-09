@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ResumerAgent</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>ResumerAgent</h1>
+    <div class="topbar-actions">
+      <span id="last-refreshed" class="muted"></span>
+      <button id="refresh-btn" class="icon-btn" title="Refresh now">⟳</button>
+    </div>
+  </header>
+
+  <main id="content">
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty hidden">No sessions found yet.</div>
+    <div id="error" class="error-banner hidden">
+      <span>Couldn't load sessions.</span>
+      <button id="retry-btn">Retry</button>
+    </div>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
