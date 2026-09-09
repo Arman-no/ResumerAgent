@@ -23,6 +23,7 @@ const CONTENT_TYPES = {
 const MAX_BODY_BYTES = 10 * 1024;
 
 const config = loadConfig();
+const ALLOWED_HOSTS = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
 
 async function getSessionsPayload() {
   const [registryEntries, liveEntries] = await Promise.all([
@@ -35,6 +36,17 @@ async function getSessionsPayload() {
     liveEntries,
     (cwd, sessionId) => readTranscriptPreview(config.sessionsRoot, cwd, sessionId)
   );
+}
+
+// Binding to 127.0.0.1 only blocks requests from OUTSIDE the machine — it
+// does nothing to stop another web page open in the same browser from
+// calling this API. A request with no Origin header at all (curl,
+// same-origin navigation) is allowed; one with a mismatched Origin is not.
+function isRequestAllowed(req) {
+  if (!ALLOWED_HOSTS.includes(req.headers.host)) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  return ALLOWED_HOSTS.some((host) => origin === `http://${host}`);
 }
 
 function serveStatic(req, res) {
@@ -75,6 +87,19 @@ function sanitizeTitle(session) {
   return `Claude: ${safe || safeFallback || 'session'}`;
 }
 
+// A live session is only ever actioned if it's a background job with a
+// real id (claude attach <id> — a view, never a resume). Everything else
+// live — interactive, or background missing its id — is refused. This is
+// an allowlist of the one proven-safe case, not a blacklist of the one
+// known-bad case, so a session shape nobody's thought of yet still fails
+// closed. liveUnknown (readLiveAgents() couldn't determine liveness) is
+// refused unconditionally, before this check even runs.
+function canSafelyAct(session) {
+  if (session.liveUnknown) return false;
+  if (!session.live) return true;
+  return session.kind === 'background' && typeof session.id === 'string' && session.id.length > 0;
+}
+
 async function handleResume(req, res) {
   let body;
   try {
@@ -84,32 +109,40 @@ async function handleResume(req, res) {
     return;
   }
 
-  let session;
+  let requestBody;
   try {
-    session = JSON.parse(body);
+    requestBody = JSON.parse(body);
   } catch {
     res.writeHead(400).end('Invalid JSON');
     return;
   }
 
   if (
-    session === null ||
-    typeof session !== 'object' ||
-    Array.isArray(session) ||
-    typeof session.cwd !== 'string' ||
-    typeof session.sessionId !== 'string'
+    requestBody === null ||
+    typeof requestBody !== 'object' ||
+    Array.isArray(requestBody) ||
+    typeof requestBody.sessionId !== 'string'
   ) {
-    res.writeHead(400).end('Invalid session: expected an object with cwd and sessionId');
+    res.writeHead(400).end('Invalid request: expected an object with sessionId');
     return;
   }
 
-  // A session that is already live and interactive already has an open
-  // terminal somewhere. There is no safe reason to resume it anyway — doing
-  // this against a real live session has been observed to destabilize other
-  // unrelated live sessions on the same machine — so it's rejected here
-  // regardless of what the client sends, not just discouraged in the UI.
-  if (session.live === true && session.kind === 'interactive') {
-    res.writeHead(400).end('Refusing to resume a session that is already live and interactive');
+  // Everything below comes from the server's own fresh lookup, never from
+  // the request body — requestBody.sessionId is only ever a lookup key.
+  // This is the fix for the gap the final review found: an earlier
+  // version trusted cwd/live/kind straight from the request body, which
+  // meant the safety guard below was only as good as whatever the client
+  // happened to send.
+  const sessions = await getSessionsPayload();
+  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
+
+  if (!session) {
+    res.writeHead(404).end('Unknown session');
+    return;
+  }
+
+  if (!canSafelyAct(session)) {
+    res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to act on this session');
     return;
   }
 
@@ -125,7 +158,9 @@ async function handleResume(req, res) {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
-    }).unref();
+    })
+      .on('error', (err) => console.error('Failed to spawn resume terminal:', err))
+      .unref();
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, command }));
@@ -136,6 +171,11 @@ async function handleResume(req, res) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (!isRequestAllowed(req)) {
+    res.writeHead(403).end('Forbidden');
+    return;
+  }
+
   if (req.url === '/api/sessions' && req.method === 'GET') {
     try {
       const sessions = await getSessionsPayload();
@@ -149,6 +189,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/api/resume' && req.method === 'POST') {
+    if (req.headers['content-type'] !== 'application/json') {
+      res.writeHead(415).end('Unsupported Content-Type');
+      return;
+    }
     try {
       await handleResume(req, res);
     } catch (err) {
@@ -168,5 +212,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(config.port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${config.port}`;
   console.log(`ResumerAgent dashboard: ${url}`);
-  exec(`cmd /c start "" "${url}"`);
+  exec(`cmd /c start "" "${url}"`, (err) => {
+    if (err) console.error('Failed to open browser:', err);
+  });
 });

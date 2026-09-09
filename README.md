@@ -11,6 +11,9 @@ browser, with one click to reopen a terminal on the right one.
 
 ## Requirements
 
+- **Windows only.** Resume/Attach open a new terminal via `cmd.exe`,
+  hardcoded — there's no cross-platform way to configure around this, so
+  this tool doesn't run usefully on macOS/Linux as-is.
 - Node.js 18+
 - pnpm (`corepack enable` if you don't have it — it ships with Node)
 - Claude Code CLI (`claude`) reachable on PATH for the live-session overlay
