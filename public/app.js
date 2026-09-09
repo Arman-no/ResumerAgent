@@ -10,6 +10,18 @@ const cardsByKey = new Map();
 let firstLoad = true;
 let lastRefreshedAt = null;
 
+// sessionId -> pending confirm-window timeout, for the two-click purge
+// confirmation below.
+const purgeConfirmTimers = new Map();
+
+function clearPurgeConfirm(sessionId) {
+  const timerId = purgeConfirmTimers.get(sessionId);
+  if (timerId) {
+    clearTimeout(timerId);
+    purgeConfirmTimers.delete(sessionId);
+  }
+}
+
 function sessionKey(s) {
   return s.sessionId;
 }
@@ -69,6 +81,18 @@ function renderCard(card, session) {
     : session.live
     ? 'Attach'
     : 'Resume';
+  // A session can only be purged once it's confirmed dead — never live,
+  // never liveUnknown (same fail-closed reasoning as the resume guard,
+  // but stricter: purging a live background session's files out from
+  // under it has no safe analog to "attach", so there is no exception).
+  const canPurge = !session.live && !session.liveUnknown;
+
+  // The button (and any armed confirm state) is about to be torn down and
+  // rebuilt below — an in-flight "click again to confirm" window must not
+  // survive that, or a later first click on the freshly-rendered button
+  // could be mistaken for the second, confirming click.
+  clearPurgeConfirm(session.sessionId);
+
   card.innerHTML = `
     <div class="card-header">
       <h2 class="card-name">${escapeHtml(session.name)}</h2>
@@ -87,10 +111,14 @@ function renderCard(card, session) {
       <button class="btn ${disabled ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${disabled ? 'disabled' : ''}>
         ${label}
       </button>
+      ${canPurge ? '<button class="btn btn-danger" data-action="purge">Delete</button>' : ''}
     </div>
   `;
   if (!disabled) {
     card.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
+  }
+  if (canPurge) {
+    card.querySelector('[data-action="purge"]').addEventListener('click', (event) => handlePurgeClick(session, event.currentTarget));
   }
 }
 
@@ -131,6 +159,54 @@ async function resumeSession(session) {
   } finally {
     renderCard(card, session);
   }
+}
+
+async function purgeSession(session, button) {
+  button.disabled = true;
+  button.textContent = '…';
+  try {
+    const res = await fetch('/api/purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.sessionId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    showToast(`Moved ${session.name} to trash`);
+    const card = grid.querySelector(`[data-key="${session.sessionId}"]`);
+    if (card) {
+      card.remove();
+      cardsByKey.delete(session.sessionId);
+    }
+  } catch {
+    showToast(`Failed to move ${session.name} to trash`);
+    button.disabled = false;
+    button.textContent = 'Delete';
+  }
+}
+
+// Two-click confirmation: the first click arms a short window during
+// which a second click on the same button actually purges. Arming briefly
+// disables the button so a fast, accidental double-click can't land both
+// clicks before a person could realistically react to the label change.
+function handlePurgeClick(session, button) {
+  const key = session.sessionId;
+  if (purgeConfirmTimers.has(key)) {
+    clearPurgeConfirm(key);
+    purgeSession(session, button);
+    return;
+  }
+
+  button.textContent = 'Click again to confirm';
+  button.disabled = true;
+  setTimeout(() => {
+    if (purgeConfirmTimers.has(key)) button.disabled = false;
+  }, 400);
+  const timerId = setTimeout(() => {
+    purgeConfirmTimers.delete(key);
+    button.textContent = 'Delete';
+    button.disabled = false;
+  }, 5000);
+  purgeConfirmTimers.set(key, timerId);
 }
 
 function renderSkeleton() {
