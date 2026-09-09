@@ -685,4 +685,40 @@ flips to `true`, `name` correctly shows "MotherAgent" again, and
   "check spot1"). `lib/transcriptPreview.mjs`'s existing backward scan now
   also recognizes this line type; since a recap is normally written after
   its triggering message, checking both in the same backward-from-the-end
+  scan (details continue below).
+
+## Revision (2026-09-09): the flicker fix didn't fix it, and a rename that didn't stick
+
+**The signature-skip above didn't actually stop the flash.** Real use
+confirmed it was still happening. Root cause was one line further down in
+the same function: `renderSessions()` called
+`sessionListEl.appendChild(row)` for **every** row on **every** poll,
+unconditionally — added specifically so DOM order tracks sort/filter
+order. But `appendChild` on a node that's already exactly where it
+belongs is still a real DOM mutation as far as a browser is concerned,
+and re-inserting an already-attached node retriggers its CSS
+`animation: row-enter` — on every row, every ~5s, regardless of whether
+that row's data (or the signature check) said anything had changed.
+Fixed by only calling `appendChild` when the row isn't already sitting at
+its correct index (`sessionListEl.children[index] !== row`) — a no-op
+reposition is now actually a no-op.
+
+**A session renamed via `/rename`, then closed cleanly, went back to "No
+Name."** The rename was real and had persisted — resuming the session
+manually showed the correct name again — but nowhere the *dead*-session
+path was looking. `/rename` writes `{type:"custom-title",
+customTitle:"..."}` directly into the transcript itself, which is exactly
+the thing that survives a clean exit (unlike the `sessions/*.json`
+registry pointer, deleted as always). `readTranscriptPreviewFromFile`'s
+existing backward tail-scan now also looks for this line and returns it
+alongside the preview (`{preview, customName}`); `lib/mergeSessions.mjs`
+uses it as a fallback ahead of the literal "No Name": `registryEntry?.name
+?? customName ?? NO_NAME`.
+
+**Not a bug, confirmed by checking directly:** the same real forked-from
+session (`2d5f121e-...`) from the liveness-gap fix above is still showing
+`liveUnknown`/"Status unknown" after all these fixes — because its
+original process (PID 39252, confirmed via `tasklist`) is, as of this
+revision, still genuinely running. That's the fix working correctly, not
+a regression — it stays that way for as long as that process does.
   scan naturally prefers whichever is more recent.
