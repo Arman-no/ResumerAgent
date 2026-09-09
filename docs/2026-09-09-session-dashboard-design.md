@@ -777,3 +777,42 @@ a shake) for a beat before reverting, instead of the button changing
 state so fast it was barely visible. All of the new animations are added
 to the existing `prefers-reduced-motion: reduce` block alongside the
 originals.
+
+## Revision (2026-09-09): a resumed session inherited this project's own agent identity
+
+Real use: resuming a session showed the *wrong* session's name in its own
+status bar (this project's own agent conversation, "MotherAgent") and
+warned "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION
+marker." The same session then never showed as live in the dashboard
+either.
+
+**Root cause, confirmed directly (`env | grep CLAUDE_CODE`), not
+guessed:** this project has been developed and repeatedly re-launched
+from inside a real Claude Code agent session (this very one) via its own
+Bash tool. That shell's environment carries `CLAUDE_CODE_CHILD_SESSION=1`
+and `CLAUDE_CODE_SESSION_ID=<this-conversation's-id>` — markers that tell
+the `claude` binary "you're a child of this other session, not an
+independent one." `server.mjs`'s own process inherited those by ordinary
+child-process inheritance, and so did anything *it* spawned — including
+every Resume/Attach terminal, which is how a resumed session ended up
+thinking it was a child of this project's own dev session. This almost
+certainly also explains "not showing as running": a session `claude`
+itself considers a child of another is a reasonable thing for `claude
+agents --json --all` to leave out of its independent-agents list, which
+is exactly the blind spot the liveness-gap fix earlier in this doc was
+built to catch — but only once a registry pointer exists to cross-check.
+
+**Fixed at the one place it actually matters: the spawn boundary.**
+`server.mjs`'s `envForResumeSpawn()` copies `process.env` and deletes
+`CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`,
+`CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` before
+handing it to the Resume/Attach `spawn()` call. This works regardless of
+whether the server's *own* process is contaminated (it currently is, for
+the reason above) — the fix doesn't depend on a clean launch, it
+guarantees one at the exact point a new independent session is created.
+Verified directly: substituted a harmless `cmd /c set` dump for the real
+`claude` command in the exact same spawn call, confirmed the four keys
+are absent from the child's environment while everything actually needed
+(`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, etc.) still passes
+through untouched — no real session or real `claude` invocation involved
+in verifying this.
