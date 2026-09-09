@@ -407,12 +407,15 @@ function renderSessions(sessions) {
       rowsByKey.set(key, row);
       rowSignatures.set(key, signature);
     }
-    // Appending an already-attached node moves it rather than duplicating
-    // it — looping in the desired final order and always appending is what
-    // keeps the DOM in sync with the current sort/filter order instead of
-    // only ever growing at the end, regardless of whether this row's
-    // content just changed.
-    sessionListEl.appendChild(row);
+    // appendChild on a node that's already exactly where it belongs is
+    // still a real DOM mutation as far as the browser is concerned — it
+    // retriggers this row's CSS enter animation, which is what caused the
+    // whole list to visibly flash on every single poll even though most
+    // rows' relative order never actually changes between polls. Only
+    // move a row when it isn't already sitting at its correct index.
+    if (sessionListEl.children[index] !== row) {
+      sessionListEl.appendChild(row);
+    }
   });
 
   for (const [key, row] of rowsByKey) {
