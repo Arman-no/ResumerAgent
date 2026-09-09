@@ -20,6 +20,8 @@ const CONTENT_TYPES = {
   '.js': 'text/javascript; charset=utf-8',
 };
 
+const MAX_BODY_BYTES = 10 * 1024;
+
 const config = loadConfig();
 
 async function getSessionsPayload() {
@@ -39,7 +41,7 @@ function serveStatic(req, res) {
   const requestedPath = req.url === '/' ? '/index.html' : req.url;
   const filePath = path.join(PUBLIC_DIR, requestedPath);
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -55,9 +57,31 @@ function serveStatic(req, res) {
   });
 }
 
-async function handleResume(req, res) {
+async function readRequestBody(req) {
   let body = '';
-  for await (const chunk of req) body += chunk;
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > MAX_BODY_BYTES) {
+      throw new Error('Request body too large');
+    }
+  }
+  return body;
+}
+
+function sanitizeTitle(session) {
+  const raw = String(session.name ?? session.sessionId ?? '');
+  const safe = raw.replace(/[^A-Za-z0-9 _.-]/g, '');
+  return `Claude: ${safe || session.sessionId}`;
+}
+
+async function handleResume(req, res) {
+  let body;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    res.writeHead(413).end('Request body too large');
+    return;
+  }
 
   let session;
   try {
@@ -67,21 +91,47 @@ async function handleResume(req, res) {
     return;
   }
 
-  const command = buildResumeCommand({
-    session,
-    resumeTemplate: config.resumeCommand,
-    attachTemplate: config.attachCommand,
-  });
+  if (
+    session === null ||
+    typeof session !== 'object' ||
+    Array.isArray(session) ||
+    typeof session.cwd !== 'string' ||
+    typeof session.sessionId !== 'string'
+  ) {
+    res.writeHead(400).end('Invalid session: expected an object with cwd and sessionId');
+    return;
+  }
 
-  const title = `Claude: ${session.name ?? session.sessionId}`;
-  spawn('cmd.exe', ['/c', 'start', title, 'cmd', '/k', command], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: false,
-  }).unref();
+  // A session that is already live and interactive already has an open
+  // terminal somewhere. There is no safe reason to resume it anyway — doing
+  // this against a real live session has been observed to destabilize other
+  // unrelated live sessions on the same machine — so it's rejected here
+  // regardless of what the client sends, not just discouraged in the UI.
+  if (session.live === true && session.kind === 'interactive') {
+    res.writeHead(400).end('Refusing to resume a session that is already live and interactive');
+    return;
+  }
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, command }));
+  try {
+    const command = buildResumeCommand({
+      session,
+      resumeTemplate: config.resumeCommand,
+      attachTemplate: config.attachCommand,
+    });
+
+    const title = sanitizeTitle(session);
+    spawn('cmd.exe', ['/c', 'start', title, 'cmd', '/k', command], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    }).unref();
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, command }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -98,7 +148,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/api/resume' && req.method === 'POST') {
-    await handleResume(req, res);
+    try {
+      await handleResume(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err) }));
+      } else {
+        res.end();
+      }
+    }
     return;
   }
 
