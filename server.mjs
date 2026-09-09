@@ -229,6 +229,14 @@ async function handlePurge(req, res) {
 
   try {
     const result = purgeSessionFiles(config.sessionsRoot, session);
+    if (result.moved.length === 0) {
+      // Found the session in the merged list but its files weren't where
+      // we expected — never report success for a mutation that didn't
+      // actually happen.
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Session files not found on disk; nothing was moved' }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, movedTo: result.movedTo }));
   } catch (err) {
