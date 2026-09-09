@@ -1,10 +1,16 @@
 const POLL_INTERVAL_MS = 5000;
 
-const grid = document.getElementById('grid');
+const sessionListEl = document.getElementById('session-list');
 const emptyEl = document.getElementById('empty');
+const noMatchesEl = document.getElementById('no-matches');
 const errorEl = document.getElementById('error');
 const lastRefreshedEl = document.getElementById('last-refreshed');
 const toastEl = document.getElementById('toast');
+const resultCountEl = document.getElementById('result-count');
+const filterSearchEl = document.getElementById('filter-search');
+const filterWhenEl = document.getElementById('filter-when');
+const sortSelectEl = document.getElementById('sort-select');
+const statusCheckboxes = document.querySelectorAll('#filters input[data-status]');
 
 const TRASH_ICON = `
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -16,7 +22,22 @@ const TRASH_ICON = `
 `;
 const SPINNER_ICON = `<span class="btn-icon-spinner"></span>`;
 
-const cardsByKey = new Map();
+const DELETE_LABEL = 'Delete session';
+const CONFIRM_LABEL = 'Click again to confirm';
+
+// Sessions as last returned by the server — filters below never re-fetch,
+// they narrow this in place, so toggling a filter feels instant instead of
+// waiting on a network round trip.
+let rawSessions = null;
+
+const filterState = {
+  search: '',
+  when: 'all',
+  statuses: new Set(['live', 'resumable', 'unknown']),
+  sortBy: 'createdAt-desc',
+};
+
+const rowsByKey = new Map();
 let firstLoad = true;
 let lastRefreshedAt = null;
 // Set from the first successful poll's startedAt; compared against every
@@ -38,6 +59,15 @@ function clearPurgeConfirm(sessionId) {
 
 function sessionKey(s) {
   return s.sessionId;
+}
+
+// The three states filterable in the sidebar — distinct from statusLabel
+// below, which additionally shows *what* a live session is doing
+// (idle/busy/waiting). Filtering only needs the coarser live/resumable/
+// unknown split.
+function statusKey(session) {
+  if (session.liveUnknown) return 'unknown';
+  return session.live ? 'live' : 'resumable';
 }
 
 function statusLabel(session) {
@@ -76,7 +106,51 @@ function escapeHtml(str) {
   }[c]));
 }
 
-function renderCard(card, session) {
+function matchesWhen(session, when) {
+  if (when === 'all') return true;
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const age = Date.now() - session.updatedAt;
+  if (when === 'today') return age <= DAY_MS;
+  if (when === 'week') return age <= 7 * DAY_MS;
+  return true;
+}
+
+function matchesSearch(session, query) {
+  if (!query) return true;
+  return `${session.name}\n${session.cwd}`.toLowerCase().includes(query);
+}
+
+function compareSessions(a, b, sortBy) {
+  switch (sortBy) {
+    case 'createdAt-asc': return a.createdAt - b.createdAt;
+    case 'updatedAt-desc': return b.updatedAt - a.updatedAt;
+    case 'name-asc': return a.name.localeCompare(b.name);
+    case 'createdAt-desc':
+    default: return b.createdAt - a.createdAt;
+  }
+}
+
+function applyFilters(sessions) {
+  return sessions
+    .filter((s) =>
+      filterState.statuses.has(statusKey(s)) &&
+      matchesWhen(s, filterState.when) &&
+      matchesSearch(s, filterState.search)
+    )
+    .sort((a, b) => compareSessions(a, b, filterState.sortBy));
+}
+
+function updateResultCount(shown, total) {
+  if (total === 0) {
+    resultCountEl.textContent = '';
+    return;
+  }
+  resultCountEl.textContent = shown === total
+    ? `${total} session${total === 1 ? '' : 's'}`
+    : `${shown} of ${total} session${total === 1 ? '' : 's'}`;
+}
+
+function renderRow(row, session) {
   // A live interactive session already has an open terminal elsewhere,
   // and a session whose liveness couldn't be confirmed might secretly be
   // one too — acting on either has no safe use, and doing so against a
@@ -100,48 +174,54 @@ function renderCard(card, session) {
   // but stricter: purging a live background session's files out from
   // under it has no safe analog to "attach", so there is no exception).
   const canPurge = !session.live && !session.liveUnknown;
+  const sizeLabel = formatSize(session.sizeBytes);
 
-  // The button (and any armed confirm state) is about to be torn down and
+  // The row (and any armed confirm state) is about to be torn down and
   // rebuilt below — an in-flight "click again to confirm" window must not
   // survive that, or a later first click on the freshly-rendered button
-  // could be mistaken for the second, confirming click.
+  // could be mistaken for the second, confirming click. Callers with an
+  // active timer for this session skip calling renderRow at all (see
+  // renderSessions) specifically so this line is never reached while
+  // armed — this is just the fallback for every other case.
   clearPurgeConfirm(session.sessionId);
 
-  card.innerHTML = `
-    <div class="card-header">
-      <h2 class="card-name">${escapeHtml(session.name)}</h2>
-      <span class="pill ${statusClass(session)}">${escapeHtml(statusLabel(session))}</span>
+  row.innerHTML = `
+    <span class="row-status pill ${statusClass(session)}">${escapeHtml(statusLabel(session))}</span>
+    <div class="row-main">
+      <div class="row-top">
+        <span class="row-name">${escapeHtml(session.name)}</span>
+        <span class="row-when muted">${relativeTime(session.updatedAt)}</span>
+      </div>
+      <div class="row-sub muted" title="${escapeHtml(session.cwd)}">
+        <span class="row-cwd">${escapeHtml(session.cwd)}</span>
+        <span class="badge">${session.kind === 'background' ? 'background' : 'interactive'}</span>
+        ${session.gitBranch ? `<span>· ${escapeHtml(session.gitBranch)}</span>` : ''}
+        ${sizeLabel ? `<span>· ${sizeLabel}</span>` : ''}
+      </div>
+      ${session.preview ? `<p class="row-preview">${escapeHtml(session.preview)}</p>` : ''}
+      <div class="row-id muted" title="Session ID">${escapeHtml(session.sessionId)}</div>
     </div>
-    <div class="card-cwd" title="${escapeHtml(session.cwd)}">${escapeHtml(session.cwd)}</div>
-    <div class="card-id" title="Session ID">${escapeHtml(session.sessionId)}</div>
-    <div class="card-meta">
-      <span class="badge">${session.kind === 'background' ? 'background' : 'interactive'}</span>
-      <span class="muted">${relativeTime(session.updatedAt)}</span>
-      ${session.gitBranch ? `<span class="muted">· ${escapeHtml(session.gitBranch)}</span>` : ''}
-      ${formatSize(session.sizeBytes) ? `<span class="muted">· ${formatSize(session.sizeBytes)}</span>` : ''}
-    </div>
-    ${session.preview ? `<p class="card-preview">${escapeHtml(session.preview)}</p>` : ''}
-    <div class="card-actions">
+    <div class="row-actions">
       <button class="btn ${disabled ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${disabled ? 'disabled' : ''}>
         ${label}
       </button>
-      ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="Delete session" aria-label="Delete session">${TRASH_ICON}</button>` : ''}
+      ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="${DELETE_LABEL}" aria-label="${DELETE_LABEL}">${TRASH_ICON}</button>` : ''}
     </div>
   `;
   if (!disabled) {
-    card.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
+    row.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
   }
   if (canPurge) {
-    card.querySelector('[data-action="purge"]').addEventListener('click', (event) => handlePurgeClick(session, event.currentTarget));
+    row.querySelector('[data-action="purge"]').addEventListener('click', (event) => handlePurgeClick(session, event.currentTarget));
   }
 }
 
-function buildCard(session) {
-  const card = document.createElement('article');
-  card.className = 'card';
-  card.dataset.key = sessionKey(session);
-  renderCard(card, session);
-  return card;
+function buildRow(session) {
+  const row = document.createElement('article');
+  row.className = 'session-row';
+  row.dataset.key = sessionKey(session);
+  renderRow(row, session);
+  return row;
 }
 
 let toastTimer;
@@ -153,8 +233,8 @@ function showToast(message) {
 }
 
 async function resumeSession(session) {
-  const card = grid.querySelector(`[data-key="${session.sessionId}"]`);
-  const button = card.querySelector('[data-action="resume"]');
+  const row = rowsByKey.get(session.sessionId);
+  const button = row.querySelector('[data-action="resume"]');
   button.disabled = true;
   button.textContent = '…';
   try {
@@ -171,7 +251,7 @@ async function resumeSession(session) {
   } catch {
     showToast(`Failed to resume ${session.name}`);
   } finally {
-    renderCard(card, session);
+    renderRow(row, session);
   }
 }
 
@@ -187,26 +267,44 @@ async function purgeSession(session, button) {
     });
     if (!res.ok) throw new Error(await res.text());
     showToast(`Moved ${session.name} to trash`);
-    const card = grid.querySelector(`[data-key="${session.sessionId}"]`);
-    if (card) {
-      // A card that just vanishes reads as an error, not a completed
-      // action — animate it out first, matching the same intent the two
-      // clicks already signaled. Reduced-motion users get the animation
-      // disabled in CSS, which means animationend would never fire — skip
-      // straight to removal for them instead of leaving a dead card stuck
-      // in the grid forever.
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        card.remove();
-      } else {
-        card.classList.add('card-leaving');
-        card.addEventListener('animationend', () => card.remove(), { once: true });
+    // rawSessions/refreshView() only run once the row has actually left the
+    // DOM — updating them first would make renderSessions() drop the row
+    // from the list on this same tick, skipping the leave animation this
+    // was supposed to play. refreshView() afterward also covers the case
+    // where this was the last row matching the current filters: the
+    // "no sessions match" message needs to appear now, not on the next poll.
+    const finishRemoval = () => {
+      rowsByKey.delete(session.sessionId);
+      if (rawSessions) {
+        rawSessions = rawSessions.filter((s) => s.sessionId !== session.sessionId);
       }
-      cardsByKey.delete(session.sessionId);
+      refreshView();
+    };
+    const row = rowsByKey.get(session.sessionId);
+    if (!row) {
+      finishRemoval();
+    } else if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      // A row that just vanishes reads as an error, not a completed action
+      // — normally it animates out first, matching the same intent the two
+      // clicks already signaled. Reduced-motion users get that animation
+      // disabled in CSS, which means animationend would never fire — skip
+      // straight to removal for them instead of leaving a dead row stuck
+      // in the list forever.
+      row.remove();
+      finishRemoval();
+    } else {
+      row.classList.add('row-leaving');
+      row.addEventListener('animationend', () => {
+        row.remove();
+        finishRemoval();
+      }, { once: true });
     }
   } catch {
     showToast(`Failed to move ${session.name} to trash`);
     button.disabled = false;
     button.innerHTML = TRASH_ICON;
+    button.title = DELETE_LABEL;
+    button.setAttribute('aria-label', DELETE_LABEL);
     button.classList.add('shake');
     button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
   }
@@ -216,6 +314,9 @@ async function purgeSession(session, button) {
 // which a second click on the same button actually purges. Arming briefly
 // disables the button so a fast, accidental double-click can't land both
 // clicks before a person could realistically react to the visual change.
+// aria-label is updated alongside title — an aria-label, once present,
+// takes over the accessible name entirely, so updating only `title` (as a
+// mouse-hover tooltip) would be invisible to keyboard/screen-reader users.
 function handlePurgeClick(session, button) {
   const key = session.sessionId;
   if (purgeConfirmTimers.has(key)) {
@@ -224,7 +325,8 @@ function handlePurgeClick(session, button) {
     return;
   }
 
-  button.title = 'Click again to confirm';
+  button.title = CONFIRM_LABEL;
+  button.setAttribute('aria-label', CONFIRM_LABEL);
   button.classList.add('armed', 'shake');
   button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
   button.disabled = true;
@@ -233,7 +335,8 @@ function handlePurgeClick(session, button) {
   }, 400);
   const timerId = setTimeout(() => {
     purgeConfirmTimers.delete(key);
-    button.title = 'Delete session';
+    button.title = DELETE_LABEL;
+    button.setAttribute('aria-label', DELETE_LABEL);
     button.classList.remove('armed');
     button.disabled = false;
   }, 5000);
@@ -241,43 +344,68 @@ function handlePurgeClick(session, button) {
 }
 
 function renderSkeleton() {
-  grid.innerHTML = '';
-  for (let i = 0; i < 3; i++) {
+  sessionListEl.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
     const skeleton = document.createElement('div');
-    skeleton.className = 'card skeleton';
-    grid.appendChild(skeleton);
+    skeleton.className = 'session-row skeleton';
+    sessionListEl.appendChild(skeleton);
   }
 }
 
 function renderSessions(sessions) {
-  // renderSkeleton() appends placeholder cards directly to #grid without
-  // registering them in cardsByKey, since they represent no real session.
+  // renderSkeleton() appends placeholder rows directly to the list without
+  // registering them in rowsByKey, since they represent no real session.
   // Clear them here so they don't linger after the first successful load.
-  grid.querySelectorAll('.skeleton').forEach((el) => el.remove());
-
-  emptyEl.classList.toggle('hidden', sessions.length > 0);
+  sessionListEl.querySelectorAll('.skeleton').forEach((el) => el.remove());
 
   const seenKeys = new Set();
   sessions.forEach((session, index) => {
     const key = sessionKey(session);
     seenKeys.add(key);
-    let card = cardsByKey.get(key);
-    if (card) {
-      renderCard(card, session);
+    let row = rowsByKey.get(key);
+    if (row) {
+      // A row with an armed purge-confirm timer is left untouched: a
+      // routine poll or filter change re-rendering it from scratch would
+      // call clearPurgeConfirm() (top of renderRow) and rebuild a fresh,
+      // unarmed button, silently defeating the two-click confirmation the
+      // user is mid-way through.
+      if (!purgeConfirmTimers.has(key)) {
+        renderRow(row, session);
+      }
     } else {
-      card = buildCard(session);
-      card.style.animationDelay = `${index * 30}ms`;
-      cardsByKey.set(key, card);
-      grid.appendChild(card);
+      row = buildRow(session);
+      row.style.animationDelay = `${index * 30}ms`;
+      rowsByKey.set(key, row);
     }
+    // Appending an already-attached node moves it rather than duplicating
+    // it — looping in the desired final order and always appending is what
+    // keeps the DOM in sync with the current sort/filter order instead of
+    // only ever growing at the end, regardless of whether this row's
+    // content just changed.
+    sessionListEl.appendChild(row);
   });
 
-  for (const [key, card] of cardsByKey) {
+  for (const [key, row] of rowsByKey) {
     if (!seenKeys.has(key)) {
-      card.remove();
-      cardsByKey.delete(key);
+      row.remove();
+      rowsByKey.delete(key);
     }
   }
+}
+
+// Runs entirely against the last-fetched rawSessions — called both after a
+// poll and after any filter control changes, so narrowing a filter never
+// waits on a network round trip. Filter controls are live from page load,
+// before the first /api/sessions response arrives — bail out rather than
+// render an empty list on top of the loading skeleton in that window.
+function refreshView() {
+  if (rawSessions === null) return;
+  const total = rawSessions.length;
+  const filtered = applyFilters(rawSessions);
+  updateResultCount(filtered.length, total);
+  renderSessions(filtered);
+  emptyEl.classList.toggle('hidden', total > 0);
+  noMatchesEl.classList.toggle('hidden', !(total > 0 && filtered.length === 0));
 }
 
 function showUpdateBanner() {
@@ -307,9 +435,9 @@ async function loadSessions() {
       // will ever surface new UI, since the rendering code itself is old.
       showUpdateBanner();
     }
-    const sessions = payload.sessions;
+    rawSessions = payload.sessions;
     errorEl.classList.add('hidden');
-    renderSessions(sessions);
+    refreshView();
     // Store the actual fetch time — computing relativeTime(Date.now())
     // at render time is always "just now" by construction and silently
     // hides a feed that's stopped updating (caught in the final review).
@@ -317,7 +445,7 @@ async function loadSessions() {
     lastRefreshedEl.textContent = `updated ${relativeTime(lastRefreshedAt)}`;
   } catch {
     if (firstLoad) {
-      grid.innerHTML = '';
+      sessionListEl.innerHTML = '';
       errorEl.classList.remove('hidden');
     } else if (lastRefreshedAt) {
       // A poll failure after the first successful load must be visible,
@@ -329,6 +457,56 @@ async function loadSessions() {
     firstLoad = false;
   }
 }
+
+function setActiveChip(when) {
+  filterWhenEl.querySelectorAll('.chip').forEach((chip) => {
+    const isActive = chip.dataset.when === when;
+    chip.classList.toggle('active', isActive);
+    chip.setAttribute('aria-checked', String(isActive));
+  });
+}
+
+function clearFilters() {
+  filterState.search = '';
+  filterState.when = 'all';
+  filterState.statuses = new Set(['live', 'resumable', 'unknown']);
+  filterState.sortBy = 'createdAt-desc';
+  filterSearchEl.value = '';
+  sortSelectEl.value = 'createdAt-desc';
+  setActiveChip('all');
+  statusCheckboxes.forEach((box) => { box.checked = true; });
+  refreshView();
+}
+
+filterSearchEl.addEventListener('input', () => {
+  filterState.search = filterSearchEl.value.trim().toLowerCase();
+  refreshView();
+});
+
+filterWhenEl.addEventListener('click', (event) => {
+  const chip = event.target.closest('.chip');
+  if (!chip) return;
+  filterState.when = chip.dataset.when;
+  setActiveChip(filterState.when);
+  refreshView();
+});
+
+statusCheckboxes.forEach((box) => {
+  box.addEventListener('change', () => {
+    filterState.statuses = new Set(
+      Array.from(statusCheckboxes).filter((b) => b.checked).map((b) => b.dataset.status)
+    );
+    refreshView();
+  });
+});
+
+sortSelectEl.addEventListener('change', () => {
+  filterState.sortBy = sortSelectEl.value;
+  refreshView();
+});
+
+document.getElementById('clear-filters-btn').addEventListener('click', clearFilters);
+document.getElementById('clear-filters-inline-btn').addEventListener('click', clearFilters);
 
 let pollTimer;
 
