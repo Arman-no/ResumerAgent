@@ -127,6 +127,9 @@ browser, with one click to reopen a terminal on the right one.
 
 ## Requirements
 
+- **Windows only.** Resume/Attach open a new terminal via `cmd.exe`,
+  hardcoded — there's no cross-platform way to configure around this, so
+  this tool doesn't run usefully on macOS/Linux as-is.
 - Node.js 18+
 - pnpm (`corepack enable` if you don't have it — it ships with Node)
 - Claude Code CLI (`claude`) reachable on PATH for the live-session overlay
@@ -189,26 +192,55 @@ git commit -m "chore: scaffold ResumerAgent project"
 - Create: `lib/config.mjs`
 
 **Interfaces:**
-- Produces: `loadConfig(env = process.env) -> { sessionsRoot: string, resumeCommand: string, attachCommand: string, port: number }`
+- Produces: `loadConfig(env = process.env) -> { sessionsRoot: string, resumeCommand: string, attachCommand: string, port: number }`. Also reads an optional `.env` file at the repo root (real `env`/`process.env` values take precedence over it).
 
 - [ ] **Step 1: Create `lib/config.mjs`**
 
 ```js
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+// Zero-dependency .env reader — no `dotenv` package (this project has no
+// required runtime dependencies), and Node's built-in --env-file flag
+// would tie the `start` script to a specific Node version floor. Real
+// process.env values still win over .env (spread order below), matching
+// the usual dotenv convention of "shell overrides file".
+function loadDotEnv(dir = REPO_ROOT) {
+  let content;
+  try {
+    content = fs.readFileSync(path.join(dir, '.env'), 'utf8');
+  } catch {
+    return {};
+  }
+  const values = {};
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    values[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+  }
+  return values;
+}
 
 export function loadConfig(env = process.env) {
-  const sessionsRoot = env.SESSIONS_ROOT
-    || env.CLAUDE_CONFIG_DIR
+  const merged = { ...loadDotEnv(), ...env };
+
+  const sessionsRoot = merged.SESSIONS_ROOT
+    || merged.CLAUDE_CONFIG_DIR
     || path.join(os.homedir(), '.claude');
 
-  const resumeCommand = env.RESUME_COMMAND
+  const resumeCommand = merged.RESUME_COMMAND
     || 'cd /d "{cwd}" && claude --resume {sessionId}';
 
-  const attachCommand = env.ATTACH_COMMAND
+  const attachCommand = merged.ATTACH_COMMAND
     || 'claude attach {id}';
 
-  const port = Number.parseInt(env.PORT, 10) || 4317;
+  const port = Number.parseInt(merged.PORT, 10) || 4317;
 
   return { sessionsRoot, resumeCommand, attachCommand, port };
 }
@@ -362,7 +394,7 @@ git commit -m "feat: read and dedup the per-process session registry"
 - Create: `lib/liveAgents.mjs`
 
 **Interfaces:**
-- Produces: `readLiveAgents() -> Promise<Array<{ pid, id?, cwd, kind, startedAt, sessionId, name, status, state? }>>` — `[]` if `claude` isn't on PATH or the command fails; never throws.
+- Produces: `readLiveAgents() -> Promise<Array<{ pid, id?, cwd, kind, startedAt, sessionId, name, status, state? }> | null>` — `null` (not `[]`) if `claude` isn't on PATH, the command fails, or output can't be parsed as an array — `null` means "liveness could not be determined" and callers must treat it as unknown, never as "nothing is live". Never throws.
 
 - [ ] **Step 1: Create `lib/liveAgents.mjs`**
 
@@ -372,6 +404,10 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+// Returns null (not []) on any failure — null means "could not determine
+// liveness", which callers must treat as unknown, not as "nothing is
+// live". Conflating the two let a slow/failed CLI call make a genuinely
+// live interactive session look safely dead (caught in the final review).
 export async function readLiveAgents() {
   try {
     const { stdout } = await execFileAsync(
@@ -380,9 +416,9 @@ export async function readLiveAgents() {
       { shell: true, windowsHide: true, timeout: 5000 }
     );
     const parsed = JSON.parse(stdout);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed : null;
   } catch {
-    return [];
+    return null;
   }
 }
 ```
@@ -501,7 +537,7 @@ git commit -m "feat: extract a one-line preview from a session's transcript"
 
 **Interfaces:**
 - Consumes: arrays shaped like `readSessionRegistry`'s and `readLiveAgents`'s output; a `getPreview(cwd, sessionId) -> string | null` callback (matches `readTranscriptPreview`'s signature with the first argument pre-bound).
-- Produces: `mergeSessions(registryEntries, liveEntries, getPreview) -> Array<{ name, sessionId, id, cwd, kind: 'interactive'|'background', live: boolean, status, updatedAt, preview }>`, sorted by `updatedAt` descending.
+- Produces: `mergeSessions(registryEntries, liveEntries, getPreview) -> Array<{ name, sessionId, id, cwd, kind: 'interactive'|'background', live: boolean, liveUnknown: boolean, status, updatedAt, preview }>`, sorted by `updatedAt` descending. `liveEntries` may be `null` (see `readLiveAgents`'s updated contract) — every merged entry then gets `liveUnknown: true, live: false`.
 
 - [ ] **Step 1: Create `lib/mergeSessions.mjs`**
 
@@ -510,8 +546,15 @@ function normalizeKind(kind) {
   return kind === 'bg' || kind === 'background' ? 'background' : 'interactive';
 }
 
+// liveEntries is null when readLiveAgents() couldn't determine liveness
+// (see lib/liveAgents.mjs) — every merged session then gets
+// liveUnknown: true and live: false, so callers can distinguish
+// "confirmed dead" from "we don't actually know" instead of treating a
+// failed liveness check as equivalent to a successful empty one.
 export function mergeSessions(registryEntries, liveEntries, getPreview) {
-  const liveBySessionId = new Map(liveEntries.map((e) => [e.sessionId, e]));
+  const liveUnknown = liveEntries === null;
+  const entries = liveUnknown ? [] : liveEntries;
+  const liveBySessionId = new Map(entries.map((e) => [e.sessionId, e]));
 
   const merged = registryEntries.map((entry) => {
     const live = liveBySessionId.get(entry.sessionId);
@@ -521,7 +564,8 @@ export function mergeSessions(registryEntries, liveEntries, getPreview) {
       id: live?.id ?? entry.jobId ?? null,
       cwd: entry.cwd,
       kind: normalizeKind(live?.kind ?? entry.kind),
-      live: Boolean(live),
+      live: liveUnknown ? false : Boolean(live),
+      liveUnknown,
       status: live?.status ?? entry.status ?? 'unknown',
       updatedAt: entry.updatedAt ?? entry.startedAt ?? 0,
       preview: getPreview(entry.cwd, entry.sessionId),
@@ -529,8 +573,9 @@ export function mergeSessions(registryEntries, liveEntries, getPreview) {
   });
 
   // Live sessions with no registry file yet (freshly started, daemon hasn't
-  // written one this run) still show up.
-  for (const live of liveEntries) {
+  // written one this run) still show up. Only possible when liveUnknown is
+  // false, since entries is [] otherwise.
+  for (const live of entries) {
     if (merged.some((m) => m.sessionId === live.sessionId)) continue;
     merged.push({
       name: live.name,
@@ -539,6 +584,7 @@ export function mergeSessions(registryEntries, liveEntries, getPreview) {
       cwd: live.cwd,
       kind: normalizeKind(live.kind),
       live: true,
+      liveUnknown: false,
       status: live.status,
       updatedAt: live.startedAt ?? 0,
       preview: getPreview(live.cwd, live.sessionId),
@@ -641,8 +687,8 @@ git commit -m "feat: build the resume/attach command from a session and template
 - Create: `server.mjs`
 
 **Interfaces:**
-- Consumes: `loadConfig` (Task 2), `readSessionRegistry` (Task 4), `readLiveAgents` (Task 5), `readTranscriptPreview` (Task 6), `mergeSessions` (Task 7), `buildResumeCommand` (Task 8) — all exact names/signatures as defined in those tasks.
-- Produces: a running HTTP server on `127.0.0.1:<port>` serving `GET /`, static files from `public/`, `GET /api/sessions`, `POST /api/resume`.
+- Consumes: `loadConfig` (Task 2), `readSessionRegistry` (Task 4), `readLiveAgents` (Task 5, now returns `Array | null`), `readTranscriptPreview` (Task 6), `mergeSessions` (Task 7, now also produces `liveUnknown`), `buildResumeCommand` (Task 8) — all exact names/signatures as defined in those tasks.
+- Produces: a running HTTP server on `127.0.0.1:<port>` serving `GET /`, static files from `public/`, `GET /api/sessions`, `POST /api/resume`. `POST /api/resume` now takes `{ sessionId }` only and resolves everything else server-side — see the code below and the design doc's "Hardening, round 2" for why.
 
 - [ ] **Step 1: Create `server.mjs`**
 
@@ -672,6 +718,7 @@ const CONTENT_TYPES = {
 const MAX_BODY_BYTES = 10 * 1024;
 
 const config = loadConfig();
+const ALLOWED_HOSTS = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
 
 async function getSessionsPayload() {
   const [registryEntries, liveEntries] = await Promise.all([
@@ -684,6 +731,17 @@ async function getSessionsPayload() {
     liveEntries,
     (cwd, sessionId) => readTranscriptPreview(config.sessionsRoot, cwd, sessionId)
   );
+}
+
+// Binding to 127.0.0.1 only blocks requests from OUTSIDE the machine — it
+// does nothing to stop another web page open in the same browser from
+// calling this API. A request with no Origin header at all (curl,
+// same-origin navigation) is allowed; one with a mismatched Origin is not.
+function isRequestAllowed(req) {
+  if (!ALLOWED_HOSTS.includes(req.headers.host)) return false;
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  return ALLOWED_HOSTS.some((host) => origin === `http://${host}`);
 }
 
 function serveStatic(req, res) {
@@ -724,6 +782,19 @@ function sanitizeTitle(session) {
   return `Claude: ${safe || safeFallback || 'session'}`;
 }
 
+// A live session is only ever actioned if it's a background job with a
+// real id (claude attach <id> — a view, never a resume). Everything else
+// live — interactive, or background missing its id — is refused. This is
+// an allowlist of the one proven-safe case, not a blacklist of the one
+// known-bad case, so a session shape nobody's thought of yet still fails
+// closed. liveUnknown (readLiveAgents() couldn't determine liveness) is
+// refused unconditionally, before this check even runs.
+function canSafelyAct(session) {
+  if (session.liveUnknown) return false;
+  if (!session.live) return true;
+  return session.kind === 'background' && typeof session.id === 'string' && session.id.length > 0;
+}
+
 async function handleResume(req, res) {
   let body;
   try {
@@ -733,32 +804,40 @@ async function handleResume(req, res) {
     return;
   }
 
-  let session;
+  let requestBody;
   try {
-    session = JSON.parse(body);
+    requestBody = JSON.parse(body);
   } catch {
     res.writeHead(400).end('Invalid JSON');
     return;
   }
 
   if (
-    session === null ||
-    typeof session !== 'object' ||
-    Array.isArray(session) ||
-    typeof session.cwd !== 'string' ||
-    typeof session.sessionId !== 'string'
+    requestBody === null ||
+    typeof requestBody !== 'object' ||
+    Array.isArray(requestBody) ||
+    typeof requestBody.sessionId !== 'string'
   ) {
-    res.writeHead(400).end('Invalid session: expected an object with cwd and sessionId');
+    res.writeHead(400).end('Invalid request: expected an object with sessionId');
     return;
   }
 
-  // A session that is already live and interactive already has an open
-  // terminal somewhere. There is no safe reason to resume it anyway — doing
-  // this against a real live session has been observed to destabilize other
-  // unrelated live sessions on the same machine — so it's rejected here
-  // regardless of what the client sends, not just discouraged in the UI.
-  if (session.live === true && session.kind === 'interactive') {
-    res.writeHead(400).end('Refusing to resume a session that is already live and interactive');
+  // Everything below comes from the server's own fresh lookup, never from
+  // the request body — requestBody.sessionId is only ever a lookup key.
+  // This is the fix for the gap the final review found: an earlier
+  // version trusted cwd/live/kind straight from the request body, which
+  // meant the safety guard below was only as good as whatever the client
+  // happened to send.
+  const sessions = await getSessionsPayload();
+  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
+
+  if (!session) {
+    res.writeHead(404).end('Unknown session');
+    return;
+  }
+
+  if (!canSafelyAct(session)) {
+    res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to act on this session');
     return;
   }
 
@@ -774,7 +853,9 @@ async function handleResume(req, res) {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
-    }).unref();
+    })
+      .on('error', (err) => console.error('Failed to spawn resume terminal:', err))
+      .unref();
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, command }));
@@ -785,6 +866,11 @@ async function handleResume(req, res) {
 }
 
 const server = http.createServer(async (req, res) => {
+  if (!isRequestAllowed(req)) {
+    res.writeHead(403).end('Forbidden');
+    return;
+  }
+
   if (req.url === '/api/sessions' && req.method === 'GET') {
     try {
       const sessions = await getSessionsPayload();
@@ -798,6 +884,10 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/api/resume' && req.method === 'POST') {
+    if (req.headers['content-type'] !== 'application/json') {
+      res.writeHead(415).end('Unsupported Content-Type');
+      return;
+    }
     try {
       await handleResume(req, res);
     } catch (err) {
@@ -817,17 +907,20 @@ const server = http.createServer(async (req, res) => {
 server.listen(config.port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${config.port}`;
   console.log(`ResumerAgent dashboard: ${url}`);
-  exec(`cmd /c start "" "${url}"`);
+  exec(`cmd /c start "" "${url}"`, (err) => {
+    if (err) console.error('Failed to open browser:', err);
+  });
 });
 ```
 
 **Safety rule for every step below (and for all future work on this
-project): never send a request that would resume/attach against a real
-session's `sessionId` — dead or alive. Doing this against a real live
-session on 2026-09-09 destabilized other unrelated live sessions on this
-machine. Use only synthetic/fake `sessionId`/`cwd` values for anything that
-exercises `/api/resume`'s spawn path.** `/api/sessions` itself is read-only
-and safe to run against real data, as in every prior task.
+project): never send a request that would resume/attach against a REAL
+LIVE session's `sessionId`.** Doing this against a real live session on
+2026-09-09 destabilized other unrelated live sessions on this machine.
+A real *dead* session is safe to target (that's the tool's actual
+purpose) and a fabricated/synthetic dead session (see below) is always
+safe. `GET /api/sessions` itself is read-only and safe against real data
+regardless of liveness, as in every prior task.
 
 - [ ] **Step 2: Manually verify the API endpoints**
 
@@ -838,46 +931,84 @@ node server.mjs &
 sleep 1
 curl -s http://127.0.0.1:4317/api/sessions
 ```
-Expected: a JSON array matching Task 7's shape, populated with this
-machine's real sessions (same names as Task 4/5's manual checks — this
-call is read-only, safe). Note: a browser tab will also pop open (from the
-`exec` call) pointing at a page that 404s until Task 10 exists — that's
-expected at this point.
+Expected: a JSON array matching Task 7's shape (now including
+`liveUnknown` on every entry, `false` in the normal case), populated with
+this machine's real sessions. Note: a browser tab will also pop open
+(from the `exec` call) pointing at a page that 404s until Task 10 exists
+— that's expected at this point.
 
 Verify the crash-safety and validation fixes with a malformed body:
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume -d 'null'
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume -H "Content-Type: application/json" -d 'null'
 curl -s http://127.0.0.1:4317/api/sessions > /dev/null && echo "server still up"
 ```
-Expected: `400` for the malformed request, then `server still up` — the
-server must NOT have crashed (this reproduces the exact case that
-previously took the whole process down).
+Expected: `400` for the malformed request, then `server still up`.
 
-Verify the live-interactive guard, using fake data only:
+Verify the origin/host gate:
 ```bash
-curl -s -w "\n%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume \
-  -H "Content-Type: application/json" \
-  -d '{"cwd":"C:\\fake","sessionId":"test-guard","live":true,"kind":"interactive","name":"fake"}'
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4317/api/sessions -H "Origin: http://evil.example"
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4317/api/sessions -H "Host: evil.example"
 ```
-Expected: `400` and the "Refusing to resume..." message — nothing spawned.
+Expected: `403` for both.
 
-Verify the resume path still works end-to-end, using fake data only (never
-a real session):
+Verify unknown-session handling (safe — no real or fake session has this
+id):
 ```bash
-curl -s -w "\n%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume \
-  -H "Content-Type: application/json" \
-  -d '{"cwd":"C:\\AE\\claude-work","sessionId":"test-1234","live":false,"kind":"interactive","name":"x\" & calc.exe & \""}'
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume -H "Content-Type: application/json" -d '{"sessionId":"does-not-exist"}'
 ```
-Expected: `200` with a `command` field in the response. A terminal window
-will open titled something like `Claude: x  calc.exe  ` (the sanitizer
-strips `"`, `&`, and other metacharacters — confirm the title bar shows no
-sign the injected `calc.exe` fragment survived as a separate command) and
-will harmlessly report it can't resume the nonexistent `test-1234` session.
-Close that window when done; nothing real was touched.
+Expected: `404`.
 
-Stop the server:
+Verify the resume path end-to-end using a **temporary fake registry
+file** — never a real session, dead or alive. This is the only way to
+exercise the full server-side-lookup path safely, since the endpoint now
+ignores everything in the request body except `sessionId` and resolves
+the rest itself:
+```bash
+cat > "$SESSIONS_ROOT_FOR_TEST/sessions/test-e2e.json" <<'EOF'
+{"pid":999999,"sessionId":"test-e2e-1234","cwd":"C:\\nonexistent-test-dir","name":"e2e-test x\" & calc.exe & \"","status":"idle","updatedAt":9999999999999}
+EOF
+curl -s -w "\n%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume -H "Content-Type: application/json" -d '{"sessionId":"test-e2e-1234"}'
+rm "$SESSIONS_ROOT_FOR_TEST/sessions/test-e2e.json"
+```
+(Replace `$SESSIONS_ROOT_FOR_TEST` with the real `sessions/` directory
+under this machine's `SESSIONS_ROOT` — the same one Task 4 read from.)
+Expected: `200` with a `command` field. A terminal window opens titled
+something like `Claude: e2e-test x  calc.exe  ` (the sanitizer strips `"`
+and `&` — confirm the title shows no sign the injected fragment survived
+as a separate command) and harmlessly reports it can't resume the
+nonexistent `test-e2e-1234` session against the nonexistent directory.
+Close that window when done; delete the temp file even if the request
+failed, so no fake session lingers in the real registry.
+
+Verify the fail-closed liveness path (safe — this only proves the code
+degrades correctly when the CLI is unreachable, no real session is
+targeted):
+```bash
+PATH="/usr/bin" node server.mjs &
+sleep 1
+curl -s http://127.0.0.1:4317/api/sessions | grep -o '"liveUnknown":true' | head -1
+curl -s -w "\n%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume -H "Content-Type: application/json" -d '{"sessionId":"anything"}'
+kill %1
+```
+Expected: at least one `"liveUnknown":true` in the sessions list (since
+`claude` isn't reachable on the scrubbed `PATH`), and `404` for the resume
+call (the fake `sessionId` still doesn't match anything — this step is
+about confirming `liveUnknown` appears, not about triggering the 409
+path, which would need a real matching registry entry combined with a
+broken CLI; trust `canSafelyAct`'s code — `if (session.liveUnknown) return
+false;` runs unconditionally before anything else — for that combination).
+
+Confirm the previous, now-superseded test server is stopped and restart
+normally for the next task:
 ```bash
 kill %1
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add server.mjs
+git commit -m "feat: serve the sessions API and resume/attach endpoint"
 ```
 
 - [ ] **Step 3: Commit**
@@ -1161,7 +1292,7 @@ git commit -m "feat: add dashboard markup and dark theme styling"
 - Create: `public/app.js`
 
 **Interfaces:**
-- Consumes: `GET /api/sessions` (Task 9) response shape from `mergeSessions` (Task 7); `POST /api/resume` (Task 9).
+- Consumes: `GET /api/sessions` (Task 9) response shape from `mergeSessions` (Task 7, now including `liveUnknown`); `POST /api/resume` (Task 9, now takes `{ sessionId }` only — the server resolves everything else itself).
 
 - [ ] **Step 1: Create `public/app.js`**
 
@@ -1176,16 +1307,19 @@ const toastEl = document.getElementById('toast');
 
 const cardsByKey = new Map();
 let firstLoad = true;
+let lastRefreshedAt = null;
 
 function sessionKey(s) {
   return s.sessionId;
 }
 
 function statusLabel(session) {
+  if (session.liveUnknown) return 'status unknown';
   return session.live ? `live · ${session.status}` : 'resumable';
 }
 
 function statusClass(session) {
+  if (session.liveUnknown) return 'status-resumable';
   return session.live ? `status-${session.status}` : 'status-resumable';
 }
 
@@ -1207,14 +1341,24 @@ function escapeHtml(str) {
 }
 
 function renderCard(card, session) {
-  // A live interactive session already has an open terminal elsewhere.
-  // Resuming it anyway has no safe use, and doing so against a real live
-  // session has previously destabilized other unrelated live sessions on
-  // the same machine — so this button is genuinely disabled (no click
-  // handler attached at all), not just styled as secondary. The server
-  // enforces the same rule independently in /api/resume; this is the
-  // client-side half of that defense, not the only one.
+  // A live interactive session already has an open terminal elsewhere,
+  // and a session whose liveness couldn't be confirmed might secretly be
+  // one too — acting on either has no safe use, and doing so against a
+  // real live session has previously destabilized other unrelated live
+  // sessions on the same machine. This button is genuinely disabled (no
+  // click handler attached at all), not just styled as secondary. The
+  // server enforces the same rule independently and is the load-bearing
+  // check (it re-resolves the session itself rather than trusting this
+  // client) — this is only the client-side half of that defense.
   const alreadyOpen = session.live && session.kind === 'interactive';
+  const disabled = alreadyOpen || session.liveUnknown;
+  const label = alreadyOpen
+    ? 'Already open elsewhere'
+    : session.liveUnknown
+    ? 'Status unknown'
+    : session.live
+    ? 'Attach'
+    : 'Resume';
   card.innerHTML = `
     <div class="card-header">
       <h2 class="card-name">${escapeHtml(session.name)}</h2>
@@ -1227,12 +1371,12 @@ function renderCard(card, session) {
     </div>
     ${session.preview ? `<p class="card-preview">${escapeHtml(session.preview)}</p>` : ''}
     <div class="card-actions">
-      <button class="btn ${alreadyOpen ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${alreadyOpen ? 'disabled' : ''}>
-        ${alreadyOpen ? 'Already open elsewhere' : session.live ? 'Attach' : 'Resume'}
+      <button class="btn ${disabled ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${disabled ? 'disabled' : ''}>
+        ${label}
       </button>
     </div>
   `;
-  if (!alreadyOpen) {
+  if (!disabled) {
     card.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
   }
 }
@@ -1259,10 +1403,13 @@ async function resumeSession(session) {
   button.disabled = true;
   button.textContent = '…';
   try {
+    // Only sessionId is sent — the server resolves cwd/live/kind/id itself
+    // from its own current session list rather than trusting this object,
+    // which may be a few seconds stale from the last poll.
     const res = await fetch('/api/resume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(session),
+      body: JSON.stringify({ sessionId: session.sessionId }),
     });
     if (!res.ok) throw new Error(await res.text());
     showToast(`Opening terminal for ${session.name}…`);
@@ -1320,11 +1467,20 @@ async function loadSessions() {
     const sessions = await res.json();
     errorEl.classList.add('hidden');
     renderSessions(sessions);
-    lastRefreshedEl.textContent = `updated ${relativeTime(Date.now())}`;
+    // Store the actual fetch time — computing relativeTime(Date.now())
+    // at render time is always "just now" by construction and silently
+    // hides a feed that's stopped updating (caught in the final review).
+    lastRefreshedAt = Date.now();
+    lastRefreshedEl.textContent = `updated ${relativeTime(lastRefreshedAt)}`;
   } catch {
     if (firstLoad) {
       grid.innerHTML = '';
       errorEl.classList.remove('hidden');
+    } else if (lastRefreshedAt) {
+      // A poll failure after the first successful load must be visible,
+      // not silent — acting on stale liveness data is exactly the kind
+      // of mistake this project exists to design out of.
+      lastRefreshedEl.textContent = `stale · last updated ${relativeTime(lastRefreshedAt)}`;
     }
   } finally {
     firstLoad = false;
