@@ -12,6 +12,7 @@ import { readTranscriptPreview, readTranscriptPreviewFromFile } from './lib/tran
 import { mergeSessions } from './lib/mergeSessions.mjs';
 import { buildResumeCommand } from './lib/resumeCommand.mjs';
 import { purgeSessionFiles } from './lib/purgeSession.mjs';
+import { envWithoutIdentity } from './lib/cleanEnv.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -112,44 +113,6 @@ function sanitizeTitle(session) {
   return `Claude: ${safe || safeFallback || 'session'}`;
 }
 
-// This server's own process can end up running underneath a real Claude
-// Code session's process tree (during development, or if the desktop
-// shortcut is ever launched from inside an existing claude terminal) and
-// inherit environment variables that identify it as belonging to that
-// session, or to whatever job/harness spawned it. Passing those straight
-// through to a Resume/Attach spawn is exactly backwards — the whole point
-// is a genuinely independent top-level session. Confirmed via two rounds
-// of a real incident: first, a resumed session's status bar showed the
-// *ancestor* session's own name and disabled its own transcript saving
-// ("inherited CLAUDE_CODE_CHILD_SESSION marker") — fixed by stripping the
-// CLAUDE_CODE_*SESSION*/MESSAGING* keys below. That still left CLAUDE_
-// JOB_DIR/CLAUDE_PID (this project's own background-job harness identity)
-// leaking through, which turned out to feed a *separate* auto-naming
-// layer: the resumed session's registry pointer recorded
-// `nameSource:"collision"`, meaning it derived the ancestor's name
-// ("MotherAgent") as its own default before auto-disambiguating to
-// "MotherAgent-<random>" — a real rename, not just a display glitch.
-// Every other env var on this machine was audited by hand (`env`, one
-// line at a time) before this list was finalized — things like
-// AWS_PROFILE/AWS_REGION/ANTHROPIC_DEFAULT_*_MODEL are load-bearing for
-// the model backend itself and are deliberately left alone; only the
-// keys that identify *this specific process's own place in a session or
-// job hierarchy* are stripped.
-const IDENTITY_ENV_KEYS = [
-  'CLAUDE_CODE_CHILD_SESSION',
-  'CLAUDE_CODE_SESSION_ID',
-  'CLAUDE_CODE_MESSAGING_SOCKET',
-  'CLAUDE_CODE_MESSAGING_TOKEN',
-  'CLAUDE_JOB_DIR',
-  'CLAUDE_PID',
-];
-
-function envForResumeSpawn() {
-  const env = { ...process.env };
-  for (const key of IDENTITY_ENV_KEYS) delete env[key];
-  return env;
-}
-
 // A live session is only ever actioned if it's a background job with a
 // real id (claude attach <id> — a view, never a resume). Everything else
 // live — interactive, or background missing its id — is refused. This is
@@ -237,7 +200,7 @@ async function handleResume(req, res) {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
-      env: envForResumeSpawn(),
+      env: envWithoutIdentity(),
     })
       .on('error', (err) => console.error('Failed to spawn resume terminal:', err))
       .unref();
