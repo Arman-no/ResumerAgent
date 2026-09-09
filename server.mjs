@@ -25,6 +25,14 @@ const CONTENT_TYPES = {
 const MAX_BODY_BYTES = 10 * 1024;
 const DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Identifies this specific server process to the client. A browser tab left
+// open across a code change keeps running its already-loaded app.js forever
+// — nothing about polling /api/sessions makes it re-fetch its own <script>.
+// The client compares this against the value it saw on its own last poll
+// and prompts a reload the moment they diverge, instead of silently
+// rendering new data through old rendering code with no way to notice.
+const SERVER_STARTED_AT = Date.now();
+
 const config = loadConfig();
 const ALLOWED_HOSTS = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
 
@@ -75,7 +83,13 @@ function serveStatic(req, res) {
       return;
     }
     const ext = path.extname(filePath);
-    res.writeHead(200, { 'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream' });
+    // This app's own static files change across sessions far more often
+    // than any real caching benefit is worth — force every reload to fetch
+    // the current version rather than risk a stale disk-cached copy.
+    res.writeHead(200, {
+      'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
+      'Cache-Control': 'no-store',
+    });
     res.end(data);
   });
 }
@@ -255,7 +269,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const sessions = await getSessionsPayload();
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(sessions));
+      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(err) }));

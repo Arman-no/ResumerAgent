@@ -137,6 +137,36 @@ ResumerAgent/                 (git repo root)
 (e.g. 4317) and opens the default browser to it. `Ctrl+C` stops it. Nothing
 runs when not in use — on-demand launch model.
 
+**Revision (2026-09-09, freshness fixes):** two related "why doesn't it show
+my changes" gaps, both stemming from nothing guaranteeing the user is
+looking at current code:
+1. **Stale server process.** The desktop shortcut previously ran `npm start`
+   directly. If a prior instance was still bound to the port (never closed,
+   e.g. left running from a previous session), the new process hit
+   `EADDRINUSE` and exited, leaving the user talking to whatever old code
+   the surviving process happened to be running, with no indication it was
+   outdated. Fixed by `scripts/launch.mjs` (invoked as `npm run launch`,
+   what the desktop shortcut now points at): before starting, it looks up
+   whatever process is listening on the configured port via `netstat`, and
+   if — and only if — that process is `node.exe` (never anything else, to
+   avoid touching an unrelated process that happens to hold the port), kills
+   it first. The shortcut now always ends up running the code currently on
+   disk.
+2. **Stale browser tab.** Even with a fresh server, a browser tab left open
+   from before a code change keeps running whatever `app.js` it already
+   loaded into memory — polling `/api/sessions` for new data does nothing
+   for new *rendering* code, since the tab never re-fetches its own
+   `<script>`. Fixed by stamping every `/api/sessions` response with
+   `startedAt` (the server process's boot time); `app.js` remembers the
+   value from its first successful poll and shows a persistent "reload"
+   banner the moment a later poll's value differs, i.e. the server it's
+   talking to restarted since this tab loaded. Static files (`index.html`,
+   `app.js`, `styles.css`) are also now served with `Cache-Control:
+   no-store`, so a manual reload can never be served a disk-cached stale
+   copy either. A tab that predates this fix has no way to know about it —
+   this only prevents the failure mode going forward, one reload after
+   deploying it is unavoidable.
+
 **Package manager:** pnpm via Corepack (`corepack enable`, bundled with
 Node). No dependencies are strictly required (`node:http`,
 `node:child_process`, `node:fs`); anything added later goes through pnpm.
