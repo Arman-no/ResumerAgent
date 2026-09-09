@@ -9,6 +9,12 @@ Claude Code already has `claude agents`, a terminal dashboard for every
 doesn't: dead interactive sessions, shown alongside the live ones, in a
 browser, with one click to reopen a terminal on the right one.
 
+**Handing this to a colleague, or to a Claude Code agent on another
+machine?** Point them at `AGENT_SETUP.md` instead of this file — it's written
+as install + self-troubleshooting instructions for an agent to follow
+directly, including the machine-specific gotchas (AppLocker, `SESSIONS_ROOT`
+detection) already hit once on the original dev machine.
+
 ## Requirements
 
 - **Windows only.** Resume/Attach open a new terminal via `cmd.exe`,
