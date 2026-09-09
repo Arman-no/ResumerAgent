@@ -20,14 +20,66 @@
     </div>
   </header>
 
-  <main id="content">
-    <div id="grid" class="grid"></div>
-    <div id="empty" class="empty hidden">No sessions found yet.</div>
-    <div id="error" class="error-banner hidden">
-      <span>Couldn't load sessions.</span>
-      <button id="retry-btn">Retry</button>
-    </div>
-  </main>
+  <div class="layout">
+    <aside class="filters" id="filters">
+      <div class="filter-group">
+        <label class="filter-label" for="filter-search">Search</label>
+        <input id="filter-search" class="filter-search" type="search" placeholder="Name or folder…" autocomplete="off" />
+      </div>
+
+      <fieldset class="filter-group">
+        <legend class="filter-label">When</legend>
+        <div class="chip-row" id="filter-when" role="radiogroup" aria-label="When">
+          <button class="chip" type="button" role="radio" aria-checked="false" data-when="today">Today</button>
+          <button class="chip" type="button" role="radio" aria-checked="false" data-when="week">This week</button>
+          <button class="chip active" type="button" role="radio" aria-checked="true" data-when="all">All</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="filter-group">
+        <legend class="filter-label">Status</legend>
+        <label class="filter-check">
+          <input type="checkbox" data-status="live" checked />
+          <span class="pill status-idle" style="pointer-events:none">live</span>
+        </label>
+        <label class="filter-check">
+          <input type="checkbox" data-status="resumable" checked />
+          <span class="pill status-resumable" style="pointer-events:none">resumable</span>
+        </label>
+        <label class="filter-check">
+          <input type="checkbox" data-status="unknown" checked />
+          <span class="pill status-resumable" style="pointer-events:none">status unknown</span>
+        </label>
+      </fieldset>
+
+      <button id="clear-filters-btn" class="link-btn" type="button">Clear filters</button>
+    </aside>
+
+    <main id="content">
+      <div class="list-toolbar">
+        <span id="result-count" class="muted" aria-live="polite"></span>
+        <label class="sort-control muted">
+          Sort:
+          <select id="sort-select">
+            <option value="createdAt-desc">Newest created</option>
+            <option value="createdAt-asc">Oldest created</option>
+            <option value="updatedAt-desc">Recently active</option>
+            <option value="name-asc">Name (A–Z)</option>
+          </select>
+        </label>
+      </div>
+      <div id="session-list" class="session-list"></div>
+      <div id="empty" class="empty hidden">No sessions found yet.</div>
+      <div id="no-matches" class="empty hidden" aria-live="polite">
+        No sessions match these filters.
+        <button id="clear-filters-inline-btn" class="link-btn" type="button">Clear filters</button>
+      </div>
+      <div id="error" class="error-banner hidden">
+        <span>Couldn't load sessions.</span>
+        <button id="retry-btn">Retry</button>
+      </div>
+    </main>
+  </div>
 
   <div id="toast" class="toast hidden"></div>
 

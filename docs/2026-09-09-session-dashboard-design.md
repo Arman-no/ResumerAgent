@@ -91,10 +91,21 @@ native case:
   mounts that directory to.
 - `RESUME_COMMAND` — a template for the command spawned on Resume/Attach,
   with `{cwd}` and `{sessionId}`/`{id}` placeholders. Default:
-  `cd /d "{cwd}" && claude --resume {sessionId}` (and `claude attach {id}`
-  for live background). A Docker user overrides this to whatever invokes
-  their container's `claude` equivalent, e.g.
+  `claude --resume {sessionId}` (and `claude attach {id}` for live
+  background). A Docker user overrides this to whatever invokes their
+  container's `claude` equivalent, e.g.
   `docker exec -it my-claude-container claude --resume {sessionId}`.
+  **Revision (2026-09-09):** the default used to be
+  `cd /d "{cwd}" && claude --resume {sessionId}`, with the working
+  directory baked into the template string. Real use hit a "filename,
+  directory name, or volume label syntax is incorrect" failure on every
+  resume — root cause was that this string gets spawned through three
+  nested layers of cmd.exe parsing (`start`, then a nested `cmd /k`), and
+  `&&`/quote characters get mis-parsed by one layer or another regardless
+  of how the string is escaped. Fixed by dropping the `cd /d` prefix
+  entirely and setting the working directory via the spawned process's own
+  `cwd` option instead (server.mjs), which `start` then inherits for the
+  new window — see the comment in lib/config.mjs for the full explanation.
 
 Both are read from environment variables, with an optional `.env` file at
 the repo root (gitignored, loaded by `lib/config.mjs` itself — no
@@ -511,3 +522,75 @@ state on refresh.
 - No automated test suite — single-user local utility; manual verification
   against synthetic/read-only data (never a live spawn against a real
   session) is the right bar.
+
+## Revision (2026-09-09): list-layout redesign follow-ups
+
+A workflow-based adversarial review of the list-layout + filter sidebar
+redesign (four dimensions, every finding independently re-verified against
+the real code) caught real, non-cosmetic bugs, all fixed:
+- DOM row order only ever grew at the end on re-render, never repositioning
+  existing rows — invisible with the old 5s-poll-only refresh, but exactly
+  the mechanism the new sort feature needs. Fixed by always
+  `appendChild`-ing every row in the desired order each render (moves an
+  already-attached node instead of duplicating it).
+- The two-click purge confirmation was silently defeated by any re-render
+  during its 5s window (a routine poll, or now any filter/sort change),
+  since `renderRow()` unconditionally clears the armed state. Fixed by
+  skipping re-render entirely for a row with an active confirm timer.
+- Filter controls were live before the first `/api/sessions` response
+  arrived, able to render an empty list on top of the loading skeleton.
+  Fixed by making `refreshView()` a no-op while `rawSessions` is still
+  `null`.
+- Accessibility: the When chips now use `role="radiogroup"`/`role="radio"`
+  + `aria-checked`; the When/Status groups are real `<fieldset>`/`<legend>`
+  pairs; `#result-count`/`#no-matches` carry `aria-live="polite"`; the
+  purge button's `aria-label` now updates alongside `title` when armed
+  (an `aria-label`, once present, fully overrides `title` for the
+  accessible name — updating only `title` was invisible to screen readers).
+- Minor code-quality cleanup: the leftover `#grid`/`grid` naming from the
+  removed card-grid layout renamed to `#session-list`/`sessionListEl`;
+  `--card-bg`/`--card-border` renamed to `--surface`/`--border` (nothing
+  card-specific uses them anymore); `resumeSession`/`purgeSession` now look
+  up their row via the existing `rowsByKey` map instead of a redundant
+  `querySelector`; `formatSize()` no longer computed twice per row.
+
+Also added in this pass:
+- **Sort control** (list toolbar, next to the result count): Newest
+  created / Oldest created / Recently active / Name (A–Z), default Newest
+  created. Purely client-side over the already-fetched `rawSessions`, same
+  as filtering — switching sort order never re-fetches. Requires
+  `createdAt` per session: `lib/discoverSessions.mjs` now also captures
+  `stat.birthtimeMs` (NTFS tracks true creation time; safe to rely on
+  since this tool is Windows-only), separate from `updatedAt`
+  (`stat.mtimeMs`, unchanged).
+- **"No Name" fallback**: a session with no registry-recorded name used to
+  fall back to its own preview text (the last real typed message) as a
+  stand-in name — which just duplicated the preview line directly below
+  it. `lib/mergeSessions.mjs` now shows literally "No Name" instead, so
+  it's obvious at a glance which sessions Claude Code never named, while
+  the preview line still carries the real context.
+
+## Revision (2026-09-09): the resume-terminal spawn bug
+
+Real use hit "The filename, directory name, or volume label syntax is
+incorrect" on every single Resume click. Root cause: the spawned command
+string (`cd /d "{cwd}" && claude --resume {sessionId}`) passed through
+three nested layers of cmd.exe parsing (this process's own `/c`, then
+`start`, then a nested `cmd /k`) via a Node `spawn()` argv array — Node
+has no escaping scheme that survives cmd.exe re-parsing `&&` and quote
+characters at every one of those layers simultaneously. Confirmed via
+isolated reproduction (`spawn('cmd.exe', ['/c', command])` alone
+reproduced the exact error) before touching any real code — see the
+comments in `lib/config.mjs` and `server.mjs` for the fix. Fixed by: (1)
+dropping the `cd /d` prefix from the default `RESUME_COMMAND`/template
+contract entirely, (2) setting the working directory via the spawned
+process's own `cwd` option instead, which `start` inherits for the new
+window, and (3) building the whole `start "title" cmd /k "command"` line
+as one pre-assembled string passed to `spawn(fullLine, {shell: true, ...})`
+rather than an argv array, since we fully control and can reason about
+every character in that one string ourselves instead of hoping Node's
+generic argv-quoting survives cmd.exe's parsing three layers deep.
+Verified end-to-end against a synthetic fake session ID (never a real one,
+per the testing rule above) — confirmed via `Get-CimInstance Win32_Process`
+that `claude.exe` actually launched with the correct command line and
+working directory.

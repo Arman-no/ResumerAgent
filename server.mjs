@@ -179,7 +179,18 @@ async function handleResume(req, res) {
     });
 
     const title = sanitizeTitle(session);
-    spawn('cmd.exe', ['/c', 'start', title, 'cmd', '/k', command], {
+    // Built as one pre-assembled line and handed to shell:true as a single
+    // string (no separate args array) rather than an argv array — Node has
+    // no reliable way to escape an argv array through three nested layers
+    // of cmd.exe parsing (this spawn -> `start` -> the nested `cmd /k`),
+    // which is exactly what produced a real "filename, directory name, or
+    // volume label syntax is incorrect" failure. The working directory is
+    // set via `cwd` below rather than a `cd /d` prefix in the command
+    // string, for the same reason — see the comment in lib/config.mjs.
+    const fullLine = `start "${title}" cmd /k "${command}"`;
+    spawn(fullLine, {
+      cwd: session.cwd,
+      shell: true,
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
