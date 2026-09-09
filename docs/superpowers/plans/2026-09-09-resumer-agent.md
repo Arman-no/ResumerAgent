@@ -669,6 +669,8 @@ const CONTENT_TYPES = {
   '.js': 'text/javascript; charset=utf-8',
 };
 
+const MAX_BODY_BYTES = 10 * 1024;
+
 const config = loadConfig();
 
 async function getSessionsPayload() {
@@ -688,7 +690,7 @@ function serveStatic(req, res) {
   const requestedPath = req.url === '/' ? '/index.html' : req.url;
   const filePath = path.join(PUBLIC_DIR, requestedPath);
 
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -704,9 +706,31 @@ function serveStatic(req, res) {
   });
 }
 
-async function handleResume(req, res) {
+async function readRequestBody(req) {
   let body = '';
-  for await (const chunk of req) body += chunk;
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > MAX_BODY_BYTES) {
+      throw new Error('Request body too large');
+    }
+  }
+  return body;
+}
+
+function sanitizeTitle(session) {
+  const raw = String(session.name ?? session.sessionId ?? '');
+  const safe = raw.replace(/[^A-Za-z0-9 _.-]/g, '');
+  return `Claude: ${safe || session.sessionId}`;
+}
+
+async function handleResume(req, res) {
+  let body;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    res.writeHead(413).end('Request body too large');
+    return;
+  }
 
   let session;
   try {
@@ -716,21 +740,47 @@ async function handleResume(req, res) {
     return;
   }
 
-  const command = buildResumeCommand({
-    session,
-    resumeTemplate: config.resumeCommand,
-    attachTemplate: config.attachCommand,
-  });
+  if (
+    session === null ||
+    typeof session !== 'object' ||
+    Array.isArray(session) ||
+    typeof session.cwd !== 'string' ||
+    typeof session.sessionId !== 'string'
+  ) {
+    res.writeHead(400).end('Invalid session: expected an object with cwd and sessionId');
+    return;
+  }
 
-  const title = `Claude: ${session.name ?? session.sessionId}`;
-  spawn('cmd.exe', ['/c', 'start', title, 'cmd', '/k', command], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: false,
-  }).unref();
+  // A session that is already live and interactive already has an open
+  // terminal somewhere. There is no safe reason to resume it anyway — doing
+  // this against a real live session has been observed to destabilize other
+  // unrelated live sessions on the same machine — so it's rejected here
+  // regardless of what the client sends, not just discouraged in the UI.
+  if (session.live === true && session.kind === 'interactive') {
+    res.writeHead(400).end('Refusing to resume a session that is already live and interactive');
+    return;
+  }
 
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ ok: true, command }));
+  try {
+    const command = buildResumeCommand({
+      session,
+      resumeTemplate: config.resumeCommand,
+      attachTemplate: config.attachCommand,
+    });
+
+    const title = sanitizeTitle(session);
+    spawn('cmd.exe', ['/c', 'start', title, 'cmd', '/k', command], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    }).unref();
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, command }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -747,7 +797,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/api/resume' && req.method === 'POST') {
-    await handleResume(req, res);
+    try {
+      await handleResume(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err) }));
+      } else {
+        res.end();
+      }
+    }
     return;
   }
 
@@ -761,6 +820,14 @@ server.listen(config.port, '127.0.0.1', () => {
 });
 ```
 
+**Safety rule for every step below (and for all future work on this
+project): never send a request that would resume/attach against a real
+session's `sessionId` — dead or alive. Doing this against a real live
+session on 2026-09-09 destabilized other unrelated live sessions on this
+machine. Use only synthetic/fake `sessionId`/`cwd` values for anything that
+exercises `/api/resume`'s spawn path.** `/api/sessions` itself is read-only
+and safe to run against real data, as in every prior task.
+
 - [ ] **Step 2: Manually verify the API endpoints**
 
 Since `public/` doesn't exist yet (Tasks 10-11), temporarily verify just the
@@ -771,9 +838,41 @@ sleep 1
 curl -s http://127.0.0.1:4317/api/sessions
 ```
 Expected: a JSON array matching Task 7's shape, populated with this
-machine's real sessions (same names as Task 4/5's manual checks). Note: a
-browser tab will also pop open (from the `exec` call) pointing at a page
-that 404s until Task 10 exists — that's expected at this point.
+machine's real sessions (same names as Task 4/5's manual checks — this
+call is read-only, safe). Note: a browser tab will also pop open (from the
+`exec` call) pointing at a page that 404s until Task 10 exists — that's
+expected at this point.
+
+Verify the crash-safety and validation fixes with a malformed body:
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume -d 'null'
+curl -s http://127.0.0.1:4317/api/sessions > /dev/null && echo "server still up"
+```
+Expected: `400` for the malformed request, then `server still up` — the
+server must NOT have crashed (this reproduces the exact case that
+previously took the whole process down).
+
+Verify the live-interactive guard, using fake data only:
+```bash
+curl -s -w "\n%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume \
+  -H "Content-Type: application/json" \
+  -d '{"cwd":"C:\\fake","sessionId":"test-guard","live":true,"kind":"interactive","name":"fake"}'
+```
+Expected: `400` and the "Refusing to resume..." message — nothing spawned.
+
+Verify the resume path still works end-to-end, using fake data only (never
+a real session):
+```bash
+curl -s -w "\n%{http_code}\n" -X POST http://127.0.0.1:4317/api/resume \
+  -H "Content-Type: application/json" \
+  -d '{"cwd":"C:\\AE\\claude-work","sessionId":"test-1234","live":false,"kind":"interactive","name":"x\" & calc.exe & \""}'
+```
+Expected: `200` with a `command` field in the response. A terminal window
+will open titled something like `Claude: x  calc.exe  ` (the sanitizer
+strips `"`, `&`, and other metacharacters — confirm the title bar shows no
+sign the injected `calc.exe` fragment survived as a separate command) and
+will harmlessly report it can't resume the nonexistent `test-1234` session.
+Close that window when done; nothing real was touched.
 
 Stop the server:
 ```bash
@@ -1107,6 +1206,13 @@ function escapeHtml(str) {
 }
 
 function renderCard(card, session) {
+  // A live interactive session already has an open terminal elsewhere.
+  // Resuming it anyway has no safe use, and doing so against a real live
+  // session has previously destabilized other unrelated live sessions on
+  // the same machine — so this button is genuinely disabled (no click
+  // handler attached at all), not just styled as secondary. The server
+  // enforces the same rule independently in /api/resume; this is the
+  // client-side half of that defense, not the only one.
   const alreadyOpen = session.live && session.kind === 'interactive';
   card.innerHTML = `
     <div class="card-header">
@@ -1120,12 +1226,14 @@ function renderCard(card, session) {
     </div>
     ${session.preview ? `<p class="card-preview">${escapeHtml(session.preview)}</p>` : ''}
     <div class="card-actions">
-      <button class="btn ${alreadyOpen ? 'btn-secondary' : 'btn-primary'}" data-action="resume">
+      <button class="btn ${alreadyOpen ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${alreadyOpen ? 'disabled' : ''}>
         ${alreadyOpen ? 'Already open elsewhere' : session.live ? 'Attach' : 'Resume'}
       </button>
     </div>
   `;
-  card.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
+  if (!alreadyOpen) {
+    card.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
+  }
 }
 
 function buildCard(session) {
@@ -1227,6 +1335,13 @@ setInterval(loadSessions, POLL_INTERVAL_MS);
 
 - [ ] **Step 2: End-to-end manual verification against real sessions**
 
+Only steps 3 and 4 below trigger a real spawn, and both are safe by
+construction: step 3 targets a session that is genuinely dead (nothing
+else has it open), and step 4 only *attaches a view* to a live background
+session (it cannot tear anything down). Do not attempt to click Resume on
+any live *interactive* card — that button should not even be clickable
+(step 5 confirms this).
+
 ```bash
 pnpm start
 ```
@@ -1236,19 +1351,26 @@ In the browser that opens:
    (`live · idle`/`live · busy`/`resumable`), monospace `cwd`, relative
    time, and (for sessions with a real transcript) an italic preview line.
 2. Hover a card — expected: it lifts slightly with a shadow.
-3. Click **Resume** on a `resumable` card — expected: a toast appears
-   ("Opening terminal for …"), and a new terminal window opens, already
-   `cd`'d into that session's directory mid-`claude --resume` (or having
-   just started it).
+3. Click **Resume** on a `resumable` card (a card whose pill says
+   `resumable`, i.e. `live: false`) — expected: a toast appears ("Opening
+   terminal for …"), and a new terminal window opens, already `cd`'d into
+   that session's directory mid-`claude --resume` (or having just started
+   it).
 4. Click **Attach** on a live *background* card (if one exists, e.g.
    `PHOENIX-18579`) — expected: a new terminal opens showing `claude attach`
-   output for that session.
-5. Confirm a live *interactive* card shows "Already open elsewhere" as a
-   secondary (not primary-colored) button.
+   output for that session. This only opens a view into the still-running
+   session; it does not stop or restart anything.
+5. Confirm a live *interactive* card shows "Already open elsewhere" and its
+   button is **actually disabled** — greyed out via the existing
+   `.btn:disabled` style, and clicking it produces no network request (check
+   the browser's network tab), no toast, no spawned terminal. This is not
+   optional styling; do not treat a merely secondary-colored-but-clickable
+   button as passing this check.
 6. Close/kill one live interactive session's terminal, wait for the 5s
    poll — expected: that card's pill changes from `live · idle` to
    `resumable` without a full-page flicker (in-place diff, not
-   rebuild-from-scratch).
+   rebuild-from-scratch), and its button becomes enabled/primary now that
+   it's genuinely dead.
 7. Temporarily rename `lib/liveAgents.mjs` to force `/api/sessions` to 500,
    reload — expected: the error banner with **Retry** appears, not a blank
    page. Rename it back and click Retry — expected: it recovers.
