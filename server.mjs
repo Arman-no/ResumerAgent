@@ -69,9 +69,10 @@ async function readRequestBody(req) {
 }
 
 function sanitizeTitle(session) {
-  const raw = String(session.name ?? session.sessionId ?? '');
-  const safe = raw.replace(/[^A-Za-z0-9 _.-]/g, '');
-  return `Claude: ${safe || session.sessionId}`;
+  const sanitize = (value) => String(value ?? '').replace(/[^A-Za-z0-9 _.-]/g, '');
+  const safe = sanitize(session.name);
+  const safeFallback = sanitize(session.sessionId);
+  return `Claude: ${safe || safeFallback || 'session'}`;
 }
 
 async function handleResume(req, res) {
