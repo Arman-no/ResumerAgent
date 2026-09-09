@@ -122,6 +122,15 @@ main { padding: 28px; }
   text-overflow: ellipsis;
 }
 
+.card-id {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  color: var(--gray);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .card-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .badge {
   background: var(--card-border);
