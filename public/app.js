@@ -11,6 +11,15 @@ const filterSearchEl = document.getElementById('filter-search');
 const filterWhenEl = document.getElementById('filter-when');
 const sortSelectEl = document.getElementById('sort-select');
 const statusCheckboxes = document.querySelectorAll('#filters input[data-status]');
+const statusAllEl = document.getElementById('status-all');
+const heartbeatEl = document.getElementById('heartbeat');
+const refreshIconEl = document.querySelector('#refresh-btn .refresh-icon');
+
+function pulseHeartbeat() {
+  heartbeatEl.classList.remove('ping');
+  void heartbeatEl.offsetWidth; // restart the CSS animation on repeat pings
+  heartbeatEl.classList.add('ping');
+}
 
 const TRASH_ICON = `
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -88,12 +97,14 @@ function statusKey(session) {
 }
 
 function statusLabel(session) {
-  if (session.liveUnknown) return 'status unknown';
+  if (session.superseded) return 'moved to a newer session';
+  if (session.liveUnknown) return session.pidConfirmedAlive ? 'running elsewhere' : 'status unknown';
   return session.live ? `live · ${session.status}` : 'resumable';
 }
 
 function statusClass(session) {
-  if (session.liveUnknown) return 'status-resumable';
+  if (session.superseded) return 'status-superseded';
+  if (session.liveUnknown) return session.pidConfirmedAlive ? 'status-external' : 'status-resumable';
   return session.live ? `status-${session.status}` : 'status-resumable';
 }
 
@@ -158,13 +169,22 @@ function applyFilters(sessions) {
 }
 
 function updateResultCount(shown, total) {
-  if (total === 0) {
-    resultCountEl.textContent = '';
-    return;
-  }
-  resultCountEl.textContent = shown === total
+  const next = total === 0
+    ? ''
+    : shown === total
     ? `${total} session${total === 1 ? '' : 's'}`
     : `${shown} of ${total} session${total === 1 ? '' : 's'}`;
+  if (next === resultCountEl.textContent) return;
+  resultCountEl.textContent = next;
+  // Only pop when the text actually changed — the early return above is
+  // what keeps this from replaying every single poll the way the row
+  // list itself used to (same root class of bug, guarded the same way).
+  resultCountEl.classList.remove('pop');
+  // Forces a reflow so re-adding the class actually restarts the
+  // animation instead of being a no-op (the class was never really
+  // removed from the DOM's perspective otherwise).
+  void resultCountEl.offsetWidth;
+  resultCountEl.classList.add('pop');
 }
 
 function renderRow(row, session) {
@@ -178,11 +198,17 @@ function renderRow(row, session) {
   // check (it re-resolves the session itself rather than trusting this
   // client) — this is only the client-side half of that defense.
   const alreadyOpen = session.live && session.kind === 'interactive';
-  const disabled = alreadyOpen || session.liveUnknown;
+  // Not a safety concern the way liveUnknown is (see server.mjs's
+  // canSafelyAct) — disabled anyway because resuming is exactly the
+  // action that would grow this old transcript further, defeating the
+  // point of having retired it in favor of the newer same-named session.
+  const disabled = alreadyOpen || session.liveUnknown || session.superseded;
   const label = alreadyOpen
     ? 'Already open elsewhere'
+    : session.superseded
+    ? 'Moved to a newer session'
     : session.liveUnknown
-    ? 'Status unknown'
+    ? (session.pidConfirmedAlive ? 'Running elsewhere' : 'Status unknown')
     : session.live
     ? 'Attach'
     : 'Resume';
@@ -201,6 +227,7 @@ function renderRow(row, session) {
   // renderSessions) specifically so this line is never reached while
   // armed — this is just the fallback for every other case.
   clearPurgeConfirm(session.sessionId);
+  row.classList.toggle('superseded-row', Boolean(session.superseded));
 
   row.innerHTML = `
     <span class="row-status pill ${statusClass(session)}">${escapeHtml(statusLabel(session))}</span>
@@ -244,9 +271,9 @@ function buildRow(session) {
 let toastTimer;
 function showToast(message) {
   toastEl.textContent = message;
-  toastEl.classList.remove('hidden');
+  toastEl.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.add('hidden'), 3000);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3000);
 }
 
 async function resumeSession(session) {
@@ -254,6 +281,7 @@ async function resumeSession(session) {
   const button = row.querySelector('[data-action="resume"]');
   button.disabled = true;
   button.textContent = '…';
+  let succeeded = true;
   try {
     // Only sessionId is sent — the server resolves cwd/live/kind/id itself
     // from its own current session list rather than trusting this object,
@@ -265,11 +293,20 @@ async function resumeSession(session) {
     });
     if (!res.ok) throw new Error(await res.text());
     showToast(`Opening terminal for ${session.name}…`);
+    button.textContent = '✓ Opened';
+    button.classList.add('btn-flash-success');
   } catch {
+    succeeded = false;
     showToast(`Failed to resume ${session.name}`);
-  } finally {
-    renderRow(row, session);
+    button.textContent = '✕ Failed';
+    button.classList.add('shake');
   }
+  // A held moment for the success/failure feedback above to actually be
+  // seen before renderRow() rebuilds the button back to its normal state —
+  // calling renderRow immediately (the old behavior) wiped both in the
+  // same tick they were added, so neither was ever visible.
+  await new Promise((resolve) => setTimeout(resolve, succeeded ? 700 : 500));
+  renderRow(row, session);
 }
 
 async function purgeSession(session, button) {
@@ -456,6 +493,7 @@ function showUpdateBanner() {
 }
 
 async function loadSessions() {
+  refreshIconEl.classList.add('spinning');
   try {
     const res = await fetch('/api/sessions');
     if (!res.ok) throw new Error(await res.text());
@@ -477,6 +515,7 @@ async function loadSessions() {
     // hides a feed that's stopped updating (caught in the final review).
     lastRefreshedAt = Date.now();
     lastRefreshedEl.textContent = `updated ${relativeTime(lastRefreshedAt)}`;
+    pulseHeartbeat();
   } catch {
     if (firstLoad) {
       sessionListEl.innerHTML = '';
@@ -489,6 +528,7 @@ async function loadSessions() {
     }
   } finally {
     firstLoad = false;
+    refreshIconEl.classList.remove('spinning');
   }
 }
 
@@ -500,6 +540,16 @@ function setActiveChip(when) {
   });
 }
 
+// Reflects the 3 status checkboxes onto the "All" master checkbox: fully
+// checked, fully unchecked, or indeterminate (native tri-state rendering —
+// a dash instead of a check) when they're mixed.
+function syncStatusAllCheckbox() {
+  const boxes = Array.from(statusCheckboxes);
+  const checkedCount = boxes.filter((b) => b.checked).length;
+  statusAllEl.checked = checkedCount === boxes.length;
+  statusAllEl.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+}
+
 function clearFilters() {
   filterState.search = '';
   filterState.when = 'all';
@@ -509,6 +559,7 @@ function clearFilters() {
   sortSelectEl.value = 'createdAt-desc';
   setActiveChip('all');
   statusCheckboxes.forEach((box) => { box.checked = true; });
+  syncStatusAllCheckbox();
   refreshView();
 }
 
@@ -530,8 +581,17 @@ statusCheckboxes.forEach((box) => {
     filterState.statuses = new Set(
       Array.from(statusCheckboxes).filter((b) => b.checked).map((b) => b.dataset.status)
     );
+    syncStatusAllCheckbox();
     refreshView();
   });
+});
+
+statusAllEl.addEventListener('change', () => {
+  const checkAll = statusAllEl.checked;
+  statusCheckboxes.forEach((box) => { box.checked = checkAll; });
+  filterState.statuses = new Set(checkAll ? Array.from(statusCheckboxes).map((b) => b.dataset.status) : []);
+  statusAllEl.indeterminate = false;
+  refreshView();
 });
 
 sortSelectEl.addEventListener('change', () => {

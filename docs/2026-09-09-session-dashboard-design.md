@@ -721,4 +721,59 @@ session (`2d5f121e-...`) from the liveness-gap fix above is still showing
 original process (PID 39252, confirmed via `tasklist`) is, as of this
 revision, still genuinely running. That's the fix working correctly, not
 a regression — it stays that way for as long as that process does.
-  scan naturally prefers whichever is more recent.
+
+## Revision (2026-09-09): clearer status text, name-collision retirement, interaction pass
+
+**"Status unknown" was drawing no distinction between two very different
+situations.** One is genuinely "we have no liveness data at all"
+(`readLiveAgents()` itself failed). The other — the `pidConfirmedAlive`
+case from the liveness-gap fix above — is "we know for a fact this is
+still running, `claude agents` just didn't report it." Real feedback:
+showing both as flat "status unknown" text buries a case we're actually
+confident about behind language that says we aren't. `pidConfirmedAlive`
+is now surfaced end to end: pill/button text says "running elsewhere"
+(amber, still pulsing — something's happening) instead of the generic gray
+"status unknown", and the resume-button label matches.
+
+**Status filter got an "All" checkbox** (native tri-state: checked, empty,
+or a dash for a mixed selection) instead of only three independent boxes
+with no way to toggle them together.
+
+**A new real workflow, planned for ahead of time rather than found as a
+bug:** a session's transcript grows large over a long life (every poll
+re-reads its tail for a preview — a real, if currently small, cost), so
+the user closes it and starts a fresh session renamed to the same name.
+Both stay discoverable — the old transcript doesn't go anywhere on its
+own — so without help, the same name would appear to duplicate itself in
+the list forever. `lib/mergeSessions.mjs` now groups sessions by name
+(`markSupersededByName`, real names only — grouping by "No Name" would
+incorrectly link every unnamed session together) and marks every
+non-live, non-liveUnknown member of a group except the most recently
+updated one `superseded: true`. A live or liveUnknown session is never
+marked superseded even if outranked by `updatedAt` — it's still doing
+something on its own, not "replaced." Superseded sessions: Resume is
+refused (client-disabled and, since the whole point is not growing that
+old transcript further via Resume, also server-refused in
+`canSafelyAct` — not a safety guard the same way `liveUnknown` is, just
+the same defense-in-depth habit), pill reads "moved to a newer session",
+row is rendered at reduced opacity, and — deliberately — Purge is still
+allowed, since these are exactly the sessions a user is most likely to
+want to clean up. Verified with a synthetic same-named pair (one file
+backdated an hour via `fs.utimesSync`, never real session data): the older
+one gets `superseded: true` and a `409`-adjacent refusal on
+`/api/resume`; the newer one doesn't.
+
+**Interaction pass** — the dashboard read as visually flat with no sense
+that it was actually alive. Added: a small heartbeat dot next to the
+brand name that idles with a slow pulse and rings out on every successful
+poll (`pulseHeartbeat()` in app.js); the refresh icon spins while a fetch
+is in flight; row hover gained a left accent bar and a slight horizontal
+lift instead of just a background tint; the result count pops when it
+actually changes (guarded the same way the row-list flicker was — only
+animates on a real change, not every poll); status/when chips pop in when
+selected; the toast now slides/fades in and out instead of an abrupt
+`hidden`-class toggle; Resume shows a held "✓ Opened" (or "✕ Failed" with
+a shake) for a beat before reverting, instead of the button changing
+state so fast it was barely visible. All of the new animations are added
+to the existing `prefers-reduced-motion: reduce` block alongside the
+originals.
