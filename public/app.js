@@ -8,16 +8,19 @@ const toastEl = document.getElementById('toast');
 
 const cardsByKey = new Map();
 let firstLoad = true;
+let lastRefreshedAt = null;
 
 function sessionKey(s) {
   return s.sessionId;
 }
 
 function statusLabel(session) {
+  if (session.liveUnknown) return 'status unknown';
   return session.live ? `live · ${session.status}` : 'resumable';
 }
 
 function statusClass(session) {
+  if (session.liveUnknown) return 'status-resumable';
   return session.live ? `status-${session.status}` : 'status-resumable';
 }
 
@@ -39,14 +42,24 @@ function escapeHtml(str) {
 }
 
 function renderCard(card, session) {
-  // A live interactive session already has an open terminal elsewhere.
-  // Resuming it anyway has no safe use, and doing so against a real live
-  // session has previously destabilized other unrelated live sessions on
-  // the same machine — so this button is genuinely disabled (no click
-  // handler attached at all), not just styled as secondary. The server
-  // enforces the same rule independently in /api/resume; this is the
-  // client-side half of that defense, not the only one.
+  // A live interactive session already has an open terminal elsewhere,
+  // and a session whose liveness couldn't be confirmed might secretly be
+  // one too — acting on either has no safe use, and doing so against a
+  // real live session has previously destabilized other unrelated live
+  // sessions on the same machine. This button is genuinely disabled (no
+  // click handler attached at all), not just styled as secondary. The
+  // server enforces the same rule independently and is the load-bearing
+  // check (it re-resolves the session itself rather than trusting this
+  // client) — this is only the client-side half of that defense.
   const alreadyOpen = session.live && session.kind === 'interactive';
+  const disabled = alreadyOpen || session.liveUnknown;
+  const label = alreadyOpen
+    ? 'Already open elsewhere'
+    : session.liveUnknown
+    ? 'Status unknown'
+    : session.live
+    ? 'Attach'
+    : 'Resume';
   card.innerHTML = `
     <div class="card-header">
       <h2 class="card-name">${escapeHtml(session.name)}</h2>
@@ -59,12 +72,12 @@ function renderCard(card, session) {
     </div>
     ${session.preview ? `<p class="card-preview">${escapeHtml(session.preview)}</p>` : ''}
     <div class="card-actions">
-      <button class="btn ${alreadyOpen ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${alreadyOpen ? 'disabled' : ''}>
-        ${alreadyOpen ? 'Already open elsewhere' : session.live ? 'Attach' : 'Resume'}
+      <button class="btn ${disabled ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${disabled ? 'disabled' : ''}>
+        ${label}
       </button>
     </div>
   `;
-  if (!alreadyOpen) {
+  if (!disabled) {
     card.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
   }
 }
@@ -91,10 +104,13 @@ async function resumeSession(session) {
   button.disabled = true;
   button.textContent = '…';
   try {
+    // Only sessionId is sent — the server resolves cwd/live/kind/id itself
+    // from its own current session list rather than trusting this object,
+    // which may be a few seconds stale from the last poll.
     const res = await fetch('/api/resume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(session),
+      body: JSON.stringify({ sessionId: session.sessionId }),
     });
     if (!res.ok) throw new Error(await res.text());
     showToast(`Opening terminal for ${session.name}…`);
@@ -152,11 +168,20 @@ async function loadSessions() {
     const sessions = await res.json();
     errorEl.classList.add('hidden');
     renderSessions(sessions);
-    lastRefreshedEl.textContent = `updated ${relativeTime(Date.now())}`;
+    // Store the actual fetch time — computing relativeTime(Date.now())
+    // at render time is always "just now" by construction and silently
+    // hides a feed that's stopped updating (caught in the final review).
+    lastRefreshedAt = Date.now();
+    lastRefreshedEl.textContent = `updated ${relativeTime(lastRefreshedAt)}`;
   } catch {
     if (firstLoad) {
       grid.innerHTML = '';
       errorEl.classList.remove('hidden');
+    } else if (lastRefreshedAt) {
+      // A poll failure after the first successful load must be visible,
+      // not silent — acting on stale liveness data is exactly the kind
+      // of mistake this project exists to design out of.
+      lastRefreshedEl.textContent = `stale · last updated ${relativeTime(lastRefreshedAt)}`;
     }
   } finally {
     firstLoad = false;
