@@ -38,6 +38,14 @@ const filterState = {
 };
 
 const rowsByKey = new Map();
+// sessionId -> a signature of the session data the row currently reflects.
+// Every 5s poll called renderRow() (full innerHTML rebuild) for every row
+// unconditionally, even when nothing about the session had actually
+// changed — visible as the whole list flashing on every poll. Skipping the
+// rebuild when the signature matches fixes that without losing real
+// updates (status changes, a new preview line, etc. always change the
+// signature and still rebuild).
+const rowSignatures = new Map();
 let firstLoad = true;
 let lastRefreshedAt = null;
 // Set from the first successful poll's startedAt; compared against every
@@ -59,6 +67,15 @@ function clearPurgeConfirm(sessionId) {
 
 function sessionKey(s) {
   return s.sessionId;
+}
+
+// Deliberately excludes nothing — every field here is something a real
+// rebuild should react to. relativeTime() is handled separately (see
+// renderSessions) precisely so it can keep advancing every poll without
+// needing a signature change, rather than being baked in here and forcing
+// a full rebuild every 5 seconds purely because time passed.
+function sessionSignature(session) {
+  return JSON.stringify(session);
 }
 
 // The three states filterable in the sidebar — distinct from statusLabel
@@ -275,6 +292,7 @@ async function purgeSession(session, button) {
     // "no sessions match" message needs to appear now, not on the next poll.
     const finishRemoval = () => {
       rowsByKey.delete(session.sessionId);
+      rowSignatures.delete(session.sessionId);
       if (rawSessions) {
         rawSessions = rawSessions.filter((s) => s.sessionId !== session.sessionId);
       }
@@ -363,19 +381,31 @@ function renderSessions(sessions) {
     const key = sessionKey(session);
     seenKeys.add(key);
     let row = rowsByKey.get(key);
+    const signature = sessionSignature(session);
     if (row) {
       // A row with an armed purge-confirm timer is left untouched: a
       // routine poll or filter change re-rendering it from scratch would
       // call clearPurgeConfirm() (top of renderRow) and rebuild a fresh,
       // unarmed button, silently defeating the two-click confirmation the
       // user is mid-way through.
-      if (!purgeConfirmTimers.has(key)) {
+      if (purgeConfirmTimers.has(key)) {
+        // leave as-is
+      } else if (rowSignatures.get(key) !== signature) {
         renderRow(row, session);
+        rowSignatures.set(key, signature);
+      } else {
+        // Nothing about the session changed — skip the full rebuild (the
+        // fix for the every-poll flash) but still advance the "X ago"
+        // text, which is derived from wall-clock time rather than
+        // anything in the signature.
+        const whenEl = row.querySelector('.row-when');
+        if (whenEl) whenEl.textContent = relativeTime(session.updatedAt);
       }
     } else {
       row = buildRow(session);
       row.style.animationDelay = `${index * 30}ms`;
       rowsByKey.set(key, row);
+      rowSignatures.set(key, signature);
     }
     // Appending an already-attached node moves it rather than duplicating
     // it — looping in the desired final order and always appending is what
@@ -389,6 +419,7 @@ function renderSessions(sessions) {
     if (!seenKeys.has(key)) {
       row.remove();
       rowsByKey.delete(key);
+      rowSignatures.delete(key);
     }
   }
 }
