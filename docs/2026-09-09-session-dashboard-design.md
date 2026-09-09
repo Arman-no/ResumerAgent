@@ -20,12 +20,32 @@ terminal windows is which" today; nothing needs to be built for it.
 The gap, confirmed by comparing `claude agents --json` against
 `claude agents --json --all`: once an **interactive** session's process is
 gone, it disappears from `claude agents` entirely (`--all` only restores
-completed **background** jobs). The only surviving trace of a dead
-interactive session is a per-process registry file at
-`<config-root>\sessions\<pid>.json` (confirmed one 6+ days old is still
-present and untouched on this machine), containing its `name`, `sessionId`,
-`cwd`, and status/timestamps — everything needed to resume it, just nothing
-to browse it with.
+completed **background** jobs).
+
+**Revision (2026-09-09, after real usage found the original approach didn't
+work): the per-process registry file is not a durable record of dead
+sessions.** The original design read `<config-root>\sessions\<pid>.json` as
+the source of dead sessions, based on one observed case where a file from
+an *ungracefully*-ended session (crash / force-kill / daemon takeover) was
+still present 6+ days later. In real use, a normal clean exit (closing the
+terminal window, typing `exit`) deletes that pointer file essentially
+immediately — confirmed directly: closing a session's window made it
+vanish from the registry within moments, while its actual transcript
+under `projects/<encoded-cwd>/<sessionId>.jsonl` remained fully intact.
+This is exactly backwards from what the tool needs: the pointer survives
+the rare case (a crash) and disappears in the common case (closing a
+terminal normally) — precisely the sessions this tool exists to recover.
+
+**Fixed by scanning transcripts directly, not the pointer file.**
+`claude --resume`'s own interactive picker (`Ctrl+A` to show all projects)
+confirms transcripts are the right source — sessions with no surviving
+registry pointer still show up there, with `cwd`, git branch, and file
+size alongside a name. Each transcript line already embeds its own `cwd`
+and `gitBranch`, so recovering these needs no lossy reverse-engineering of
+the encoded folder name — see `lib/discoverSessions.mjs`. The registry
+file is now only consulted afterward, to overlay a nicer name when Claude
+Code happened to record one; it is no longer the primary source of dead
+sessions.
 
 ## Goal
 
@@ -45,8 +65,11 @@ A small local web dashboard, launched on demand, that:
    Portability below.
 
 Explicitly out of scope: reimplementing `claude agents` itself, remote/network
-access (this is a single-user localhost tool), authentication, editing or
-deleting sessions, showing full transcripts.
+access (this is a single-user localhost tool), authentication, editing
+sessions, showing full transcripts. (Purging a confirmed-dead session — see
+`POST /api/purge` below, added 2026-09-09 — is now in scope; it was
+originally excluded here alongside "editing," but real use surfaced a
+genuine need to declutter old/no-longer-wanted sessions.)
 
 ## Portability (native install vs. Docker)
 
@@ -123,18 +146,45 @@ Serves `public/index.html` (which pulls in `styles.css` and `app.js` as
 static files from the same server).
 
 ### `GET /api/sessions`
-1. Reads every `<SESSIONS_ROOT>\sessions\*.json`.
-2. Deduplicates by `name`, keeping the entry with the latest `updatedAt`.
+1. Scans `<SESSIONS_ROOT>\projects\*\*.jsonl` for every transcript modified
+   in the last 7 days — this is the primary source of sessions, dead or
+   alive (see the Problem section's revision above for why). Each file's
+   own `cwd` and `gitBranch` fields are read from a small prefix read (no
+   need to tail-read or decode the folder name), along with its file size.
+2. Reads every `<SESSIONS_ROOT>\sessions\*.json` (deduplicated by `name`,
+   keeping the entry with the latest `updatedAt`) and overlays its `name`,
+   `id`/`jobId`, `kind`, and `status` onto any transcript-discovered
+   session with a matching `sessionId`, when present. Without a saved
+   name, the session falls back to a name
+   derived from its own preview text (see step 4), then the last path
+   segment of `cwd`, then a short slice of its id — never Claude's own
+   LLM-generated conversation titles (visible in `claude --resume`'s
+   picker), which this tool has no cheap way to reproduce.
 3. Runs `claude agents --json --all` and marks any entry whose `sessionId`
    appears there as `live: true`, carrying over its live `status`
-   (idle/busy/waiting) and `kind` (interactive/background).
-4. For each session, reads the last few lines of its transcript at
-   `<SESSIONS_ROOT>\projects\<encoded-cwd>\<sessionId>.jsonl` and extracts
-   the most recent `type: "user"` message's text as a one-line preview
-   (truncated, first line only). Missing/unparsable file → preview omitted,
-   no error surfaced for this cosmetic field.
-5. Returns a JSON array, newest `updatedAt` first (shape unchanged from the
-   original design — see example in git history / README).
+   (idle/busy/waiting), `kind` (interactive/background), and `id`.
+4. For each session, reads the last few lines of its transcript and
+   extracts the most recent message that looks like something a person
+   actually typed — skipping tool/system output stored under the same
+   "user" role (`<local-command-stdout>`-style tags, bracket-wrapped
+   artifacts, the auto-compaction summary banner, a skill's own
+   invocation preamble; see `lib/transcriptPreview.mjs`'s
+   `SYNTHETIC_TEXT_PREFIXES` — a best-effort list, not exhaustive) — as a
+   one-line preview (truncated, first line only, ANSI codes stripped).
+   Missing/unparsable file, or no non-synthetic message found → preview
+   omitted, no error surfaced for this cosmetic field.
+5. Returns a JSON array, newest `updatedAt` first, now also carrying
+   `gitBranch` and `sizeBytes` per session (`null` for a live session
+   whose transcript hasn't been discovered yet) and `liveUnknown` as
+   before.
+
+**Known scaling ceiling, not yet mitigated:** every 5s poll re-scans and
+re-stats every `.jsonl` under `projects/*` (step 1) and re-reads a preview
+tail for every session inside the 7-day window (step 4) — there is no
+caching between polls. Fine at this project's real scale today (dozens of
+files, low-single-digit MB each); worth revisiting with a cache keyed by
+file mtime if `projects/` ever grows into the thousands of files or
+individual transcripts into the tens of MB.
 
 ### `POST /api/resume`
 Body: `{ "sessionId": "<the session's id>" }` — **nothing else from the
@@ -225,6 +275,45 @@ allowed, matching how a purely local tool should behave). `POST
 which forces a CORS preflight for any cross-origin caller and gives the
 `Origin` check a chance to run before the browser would otherwise treat
 the request as "simple."
+
+### `POST /api/purge` (added 2026-09-09)
+
+Body: `{ "sessionId": "<the session's id>" }` — same server-side
+resolve-by-id pattern as `POST /api/resume`; nothing else from the body is
+trusted.
+
+**Purges by moving to a trash folder, never a real delete.** Moves the
+session's transcript (and its companion directory, if Claude Code created
+one alongside the `.jsonl`) from `<SESSIONS_ROOT>\projects\<encoded-cwd>\`
+into `<SESSIONS_ROOT>\.resumeragent-trash\<encoded-cwd>\` — an
+`fs.rename`, not a delete. This is deliberately reversible: move the
+folder back to undo it, or empty `.resumeragent-trash` yourself once
+you're sure. The session disappears from the dashboard immediately (the
+next discovery scan no longer finds it under `projects/`), which is the
+actual goal — decluttering — without the risk of an irreversible mistake.
+See `lib/purgeSession.mjs`.
+
+**Safety, stricter than resume, not looser:** resuming allows one narrow
+exception for live sessions (`kind === 'background'` with an `id` —
+`claude attach`, a view, never a resume). Purging has no such exception —
+`session.liveUnknown || session.live` is refused outright, full stop,
+regardless of kind. There is no safe analog to "attach" for moving a
+session's files out from under it, so this check doesn't need to be an
+allowlist of exceptions; it's a flat refusal of anything not confirmed
+dead. Same `409` (liveness unknown) vs `400` (confirmed live) distinction
+as the resume guard.
+
+**Client-side confirmation:** a "Delete" button appears only on cards
+that are confirmed dead (mirrors the server's own gate — never rendered
+at all for a live or liveUnknown session, not just disabled). Requires
+two clicks: the first arms a 5-second confirmation window and relabels the
+button "Click again to confirm"; a second click within that window
+actually fires the request. The button is briefly disabled right after
+the first click so a fast accidental double-click can't land both clicks
+before a person could realistically react to the label change. This was
+a deliberate choice over a type-the-name confirmation, made explicitly by
+the user weighing convenience against the (already well-mitigated, given
+the trash-not-delete model) risk of a mistaken purge.
 
 ## UI/UX
 
