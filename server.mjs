@@ -259,6 +259,24 @@ async function handlePurge(req, res) {
   }
 }
 
+// Closing a browser tab doesn't touch the server process at all — it's
+// independent, launched from its own console window, and stays up until
+// that window closes or something tells it to stop. This is the "tell it
+// to stop" path: no body, no session lookup, just a deliberate action the
+// dashboard itself exposes so there's always a way to fully power it down
+// without hunting for the console window.
+function handleShutdown(req, res) {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true }));
+  console.log('Shutdown requested from the dashboard — stopping ResumerAgent.');
+  server.close();
+  // server.close() only stops accepting new connections; it waits for
+  // existing keep-alive sockets to end before actually resolving, which for
+  // a page held open with a live poll loop can hang indefinitely. Nothing
+  // here needs a graceful drain, so force the exit shortly after regardless.
+  setTimeout(() => process.exit(0), 200);
+}
+
 const server = http.createServer(async (req, res) => {
   if (!isRequestAllowed(req)) {
     res.writeHead(403).end('Forbidden');
@@ -310,6 +328,11 @@ const server = http.createServer(async (req, res) => {
         res.end();
       }
     }
+    return;
+  }
+
+  if (req.url === '/api/shutdown' && req.method === 'POST') {
+    handleShutdown(req, res);
     return;
   }
 

@@ -6,6 +6,16 @@ const errorEl = document.getElementById('error');
 const lastRefreshedEl = document.getElementById('last-refreshed');
 const toastEl = document.getElementById('toast');
 
+const TRASH_ICON = `
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7h16" />
+    <path d="M10 11v6M14 11v6" />
+    <path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" />
+    <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+  </svg>
+`;
+const SPINNER_ICON = `<span class="btn-icon-spinner"></span>`;
+
 const cardsByKey = new Map();
 let firstLoad = true;
 let lastRefreshedAt = null;
@@ -115,7 +125,7 @@ function renderCard(card, session) {
       <button class="btn ${disabled ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${disabled ? 'disabled' : ''}>
         ${label}
       </button>
-      ${canPurge ? '<button class="btn btn-danger" data-action="purge">Delete</button>' : ''}
+      ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="Delete session" aria-label="Delete session">${TRASH_ICON}</button>` : ''}
     </div>
   `;
   if (!disabled) {
@@ -167,7 +177,8 @@ async function resumeSession(session) {
 
 async function purgeSession(session, button) {
   button.disabled = true;
-  button.textContent = '…';
+  button.classList.remove('armed');
+  button.innerHTML = SPINNER_ICON;
   try {
     const res = await fetch('/api/purge', {
       method: 'POST',
@@ -178,20 +189,33 @@ async function purgeSession(session, button) {
     showToast(`Moved ${session.name} to trash`);
     const card = grid.querySelector(`[data-key="${session.sessionId}"]`);
     if (card) {
-      card.remove();
+      // A card that just vanishes reads as an error, not a completed
+      // action — animate it out first, matching the same intent the two
+      // clicks already signaled. Reduced-motion users get the animation
+      // disabled in CSS, which means animationend would never fire — skip
+      // straight to removal for them instead of leaving a dead card stuck
+      // in the grid forever.
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        card.remove();
+      } else {
+        card.classList.add('card-leaving');
+        card.addEventListener('animationend', () => card.remove(), { once: true });
+      }
       cardsByKey.delete(session.sessionId);
     }
   } catch {
     showToast(`Failed to move ${session.name} to trash`);
     button.disabled = false;
-    button.textContent = 'Delete';
+    button.innerHTML = TRASH_ICON;
+    button.classList.add('shake');
+    button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
   }
 }
 
 // Two-click confirmation: the first click arms a short window during
 // which a second click on the same button actually purges. Arming briefly
 // disables the button so a fast, accidental double-click can't land both
-// clicks before a person could realistically react to the label change.
+// clicks before a person could realistically react to the visual change.
 function handlePurgeClick(session, button) {
   const key = session.sessionId;
   if (purgeConfirmTimers.has(key)) {
@@ -200,14 +224,17 @@ function handlePurgeClick(session, button) {
     return;
   }
 
-  button.textContent = 'Click again to confirm';
+  button.title = 'Click again to confirm';
+  button.classList.add('armed', 'shake');
+  button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
   button.disabled = true;
   setTimeout(() => {
     if (purgeConfirmTimers.has(key)) button.disabled = false;
   }, 400);
   const timerId = setTimeout(() => {
     purgeConfirmTimers.delete(key);
-    button.textContent = 'Delete';
+    button.title = 'Delete session';
+    button.classList.remove('armed');
     button.disabled = false;
   }, 5000);
   purgeConfirmTimers.set(key, timerId);
@@ -303,9 +330,31 @@ async function loadSessions() {
   }
 }
 
+let pollTimer;
+
+async function shutdownServer() {
+  const button = document.getElementById('shutdown-btn');
+  button.disabled = true;
+  try {
+    await fetch('/api/shutdown', { method: 'POST' });
+  } catch {
+    // The server closing its socket mid-response can surface as a fetch
+    // error even though the shutdown itself succeeded — either way, the
+    // next line stops polling a server we just told to stop existing.
+  }
+  clearInterval(pollTimer);
+  document.body.innerHTML = `
+    <div class="empty">
+      ResumerAgent has been shut down.<br />
+      Relaunch it from the desktop shortcut when you need it again.
+    </div>
+  `;
+}
+
 document.getElementById('refresh-btn').addEventListener('click', loadSessions);
 document.getElementById('retry-btn').addEventListener('click', loadSessions);
+document.getElementById('shutdown-btn').addEventListener('click', shutdownServer);
 
 renderSkeleton();
 loadSessions();
-setInterval(loadSessions, POLL_INTERVAL_MS);
+pollTimer = setInterval(loadSessions, POLL_INTERVAL_MS);
