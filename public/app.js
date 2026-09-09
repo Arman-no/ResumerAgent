@@ -32,7 +32,16 @@ function relativeTime(ts) {
   const hours = Math.round(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   const days = Math.round(hours / 24);
-  return `${days}d ago`;
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.round(days / 7);
+  return `${weeks}w ago`;
+}
+
+function formatSize(bytes) {
+  if (bytes == null) return null;
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 function escapeHtml(str) {
@@ -66,9 +75,12 @@ function renderCard(card, session) {
       <span class="pill ${statusClass(session)}">${escapeHtml(statusLabel(session))}</span>
     </div>
     <div class="card-cwd" title="${escapeHtml(session.cwd)}">${escapeHtml(session.cwd)}</div>
+    <div class="card-id" title="Session ID">${escapeHtml(session.sessionId)}</div>
     <div class="card-meta">
       <span class="badge">${session.kind === 'background' ? 'background' : 'interactive'}</span>
       <span class="muted">${relativeTime(session.updatedAt)}</span>
+      ${session.gitBranch ? `<span class="muted">· ${escapeHtml(session.gitBranch)}</span>` : ''}
+      ${formatSize(session.sizeBytes) ? `<span class="muted">· ${formatSize(session.sizeBytes)}</span>` : ''}
     </div>
     ${session.preview ? `<p class="card-preview">${escapeHtml(session.preview)}</p>` : ''}
     <div class="card-actions">

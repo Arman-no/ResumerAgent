@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { exec, spawn } from 'node:child_process';
 
 import { loadConfig } from './lib/config.mjs';
+import { discoverSessions } from './lib/discoverSessions.mjs';
 import { readSessionRegistry } from './lib/sessionRegistry.mjs';
 import { readLiveAgents } from './lib/liveAgents.mjs';
 import { readTranscriptPreview } from './lib/transcriptPreview.mjs';
@@ -21,17 +22,20 @@ const CONTENT_TYPES = {
 };
 
 const MAX_BODY_BYTES = 10 * 1024;
+const DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const config = loadConfig();
 const ALLOWED_HOSTS = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
 
 async function getSessionsPayload() {
-  const [registryEntries, liveEntries] = await Promise.all([
+  const [transcriptEntries, registryEntries, liveEntries] = await Promise.all([
+    Promise.resolve(discoverSessions(config.sessionsRoot, DISCOVERY_WINDOW_MS)),
     Promise.resolve(readSessionRegistry(config.sessionsRoot)),
     readLiveAgents(),
   ]);
 
   return mergeSessions(
+    transcriptEntries,
     registryEntries,
     liveEntries,
     (cwd, sessionId) => readTranscriptPreview(config.sessionsRoot, cwd, sessionId)
