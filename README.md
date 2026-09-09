@@ -30,6 +30,17 @@ pnpm start
 This starts a server on `http://127.0.0.1:4317` and opens it in your
 browser. `Ctrl+C` to stop; nothing runs when you're not using it.
 
+**Desktop shortcut:** if you double-click a shortcut to launch this instead
+of running the command yourself, point it at `npm run launch` rather than
+`npm start`/`pnpm start`. `launch` first stops any previous ResumerAgent
+instance still bound to the port before starting a fresh one, so you're
+always looking at whatever code is currently on disk — plain `start` will
+silently keep an old instance running if one is already there. Either way,
+if a browser tab was already open before you relaunched, reload it — a tab
+never re-fetches its own already-loaded JavaScript on its own, though it
+will show a banner prompting you to reload once it notices the server
+restarted.
+
 ## Configuration
 
 Two things, both optional, set via `.env` or your shell:
