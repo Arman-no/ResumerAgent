@@ -73,9 +73,10 @@ native case:
   their container's `claude` equivalent, e.g.
   `docker exec -it my-claude-container claude --resume {sessionId}`.
 
-Both are read from environment variables, with an optional `.env` file (via
-`dashboard/.env`, gitignored) for convenience — never committed, since a
-colleague's path/command may reference their own local setup.
+Both are read from environment variables, with an optional `.env` file at
+the repo root (gitignored, loaded by `lib/config.mjs` itself — no
+dependency) for convenience — never committed, since a colleague's
+path/command may reference their own local setup.
 
 The README documents this explicitly for Docker users: "if your session
 files aren't under the default location, or `claude` isn't a bare host
@@ -91,8 +92,16 @@ ResumerAgent/                 (git repo root)
   README.md
   package.json                pnpm, "start" script
   .gitignore                   node_modules, .env
-  .env.example                 documents SESSIONS_ROOT / RESUME_COMMAND
+  .env.example                 documents SESSIONS_ROOT / RESUME_COMMAND / ATTACH_COMMAND / PORT
   server.mjs                   Node http server (no framework, uses node:http)
+  lib/
+    config.mjs                 env + .env resolution
+    pathEncoding.mjs           cwd -> Claude Code "projects" folder name
+    sessionRegistry.mjs        reads sessions/*.json, dedups by name
+    liveAgents.mjs             runs `claude agents --json --all`
+    transcriptPreview.mjs      last user message from a session's .jsonl
+    mergeSessions.mjs          combines registry + live + preview
+    resumeCommand.mjs          template substitution for the spawned command
   public/
     index.html                 markup
     styles.css                 visual design
@@ -128,34 +137,28 @@ static files from the same server).
    original design — see example in git history / README).
 
 ### `POST /api/resume`
-Body: the exact session object the frontend received for that card (no
-separate lookup). Builds the command from `RESUME_COMMAND` (or the
-attach variant for live background sessions) by substituting `{cwd}`,
-`{sessionId}`, `{id}` from that object — never from free-typed frontend
-input — then spawns it via
-`cmd /c start "Claude: <name>" cmd /k "<command>"`.
+Body: `{ "sessionId": "<the session's id>" }` — **nothing else from the
+request body is trusted.** The server re-fetches its own current session
+list (the same computation `GET /api/sessions` does) and looks the session
+up by that `sessionId`; `cwd`, `live`, `kind`, `id`, and `name` all come
+from that fresh server-side lookup, never from the client. This closed a
+real gap found in the final review (see Hardening below): the first
+version of this endpoint took `cwd`/`live`/`kind` etc. straight from the
+POST body, which meant the safety guard below was only as good as
+whatever the client happened to send — stale, spoofable, or simply wrong
+if a poll raced a real state change.
 
-**Hardening (added after a real incident during Task 9's fix loop — see
-below):** running `claude --resume <id>` against a session ID that is
+Builds the command from `RESUME_COMMAND` (or the attach variant) by
+substituting `{cwd}`, `{sessionId}`, `{id}` from that server-resolved
+session, then spawns it via `cmd /c start "Claude: <name>" cmd /k
+"<command>"`.
+
+**Hardening, round 1 (added after a real incident during Task 9's original
+fix loop):** running `claude --resume <id>` against a session ID that is
 *already live* is not just visually confusing, it is genuinely unsafe —
 doing this against a real live session on 2026-09-09 triggered something in
 the local Claude Code daemon that tore down other unrelated live terminal
-sessions on the same machine. There is no safe reason for this tool to ever
-send that request, so it is blocked at two layers, not styled away at one:
-
-- **Server:** `POST /api/resume` rejects with `400` and does not build or
-  spawn anything if `session.live === true && session.kind === 'interactive'`.
-  This is the load-bearing check — it protects the machine even if the
-  client is bypassed, stale, or wrong.
-- **Client:** a card for a live *interactive* session renders its action
-  button fully `disabled` (no click handler attached at all — not merely
-  styled as secondary), labeled "Already open elsewhere". A live
-  *background* session still gets an enabled Attach button (`claude attach
-  <id>`), which only opens a **view** into the still-running session and
-  cannot tear anything down — that action stays safe and is unaffected by
-  this hardening. A dead session (`live: false`) still gets a fully enabled
-  Resume button — resuming a session nothing else currently holds open is
-  the tool's actual intended purpose and has no such risk.
+sessions on the same machine.
 
 **What actually happened (for future reference):** while manually verifying
 that Task 9's resume endpoint still worked normally after fixing an
@@ -167,14 +170,61 @@ session's own process was replaced. The exact internal mechanism inside
 Claude Code's daemon isn't fully known, but the causal chain (real resume
 of a live ID → sessions torn down moments later) is clear enough that this
 action is now treated as unsafe by design, not just by convention. Any
-future manual verification of the resume/attach endpoints — in this
-project or when extending it — must use synthetic fake IDs
-(e.g. `sessionId: "test-1234"`, a `cwd` that doesn't need to exist) for
-anything that actually spawns a process. A dead-but-real session is
-*closer* to safe than a live one, but "fake data, verify the command
-string, don't actually need to trigger a real spawn to prove the logic is
-correct" is the preferred method going forward — it gives full confidence
-in the code path with zero risk to anything real.
+manual verification of the resume/attach endpoints — in this project or
+when extending it — must use synthetic fake IDs (e.g. `sessionId:
+"test-1234"`) for anything that actually spawns a process; asserting on
+the returned `command` string is sufficient, no real spawn is needed to
+prove the logic is correct.
+
+**Hardening, round 2 (added after the final whole-branch review found the
+round-1 guard didn't actually hold end to end):** three concrete problems
+with round 1's design, and how each is closed:
+
+1. **The guard trusted the request body's `live`/`kind` fields.** Fixed by
+   the server-side lookup-by-`sessionId` described above — the client can
+   no longer assert its own liveness; the server always uses its own
+   freshest view.
+2. **`readLiveAgents()` failed *open*:** any error (a `claude` CLI timeout,
+   not on PATH, malformed output) made it return `[]`, which `mergeSessions`
+   read as "nothing is live" — so a slow `claude agents` call could make a
+   genuinely live interactive session look dead, and the (now-correct)
+   guard would wave it through. Fixed: `readLiveAgents()` returns `null`
+   on failure, distinct from `[]` (empty on success). `mergeSessions` marks
+   every session `liveUnknown: true` when given `null`, and `/api/resume`
+   refuses (`409`) if the resolved session has `liveUnknown: true` — fail
+   **closed** when liveness can't be confirmed, not open. The UI disables
+   the action button the same way it does for "already open elsewhere",
+   labeled "Status unknown".
+3. **The safe-path check was a narrow blacklist** (`live === true &&
+   kind === 'interactive'`), bypassable in principle by type juggling on a
+   hand-crafted body, and it didn't cover a live *background* session
+   missing its `id` (which would silently fall through to the unsafe
+   `--resume` template instead of refusing). Replaced with an allowlist:
+   a live session is only ever actioned if it is `kind === 'background'`
+   **and** has a non-empty `id` (the one proven-safe case — `claude attach
+   <id>`); every other live session, for any reason, is refused. This also
+   makes the check immune to the body no longer being trusted for these
+   fields in the first place, since `live`/`kind`/`id` are now the
+   server's own values.
+
+**Hardening, round 2, part 2 — origin/host checks:** the endpoint had no
+`Origin`/`Host` validation, so any web page open in the same browser while
+the dashboard is running could POST to it (a same-origin-policy gap, not a
+CORS one — simple cross-origin POSTs aren't blocked by browsers on the
+request side, only the response). Even with the round-2 fixes above
+closing the dangerous outcomes, an uninvited page silently triggering a
+real (if safe) resume, or reading session names/previews via a cross-
+origin `GET /api/sessions`, is not acceptable for a tool with no auth
+layer. Fixed: reject (`403`) any request whose `Host` header isn't
+`127.0.0.1:<port>` or `localhost:<port>` (blocks DNS-rebinding), and reject
+any request whose `Origin` header is present and doesn't match the same
+allowlist (blocks ordinary cross-origin script access; a request with no
+`Origin` header at all — e.g. curl, or same-origin navigation — is
+allowed, matching how a purely local tool should behave). `POST
+/api/resume` additionally requires `Content-Type: application/json`,
+which forces a CORS preflight for any cross-origin caller and gives the
+`Origin` check a chance to run before the browser would otherwise treat
+the request as "simple."
 
 ## UI/UX
 
@@ -192,15 +242,23 @@ Goal: a small tool that feels deliberately designed, not a debug page.
 
 **Layout**
 - Header: title, manual refresh icon-button, last-refreshed relative
-  timestamp.
+  timestamp — reflecting the timestamp of the last *successful* fetch, not
+  "now" (an earlier version computed `relativeTime(Date.now())` at render
+  time, which is always "just now" by construction and silently hid a
+  stale feed; fixed to store and reuse the actual fetch time).
 - Responsive card grid (`repeat(auto-fill, minmax(300px, 1fr))`), one card
   per session: name (bold), status pill, `cwd` in monospace
   (ellipsis-truncated, full path on hover), relative last-active time,
   italic one-line preview (2-line clamp), kind badge, primary action button
   (Resume for dead sessions / Attach for live background sessions /
-  disabled "Already open elsewhere" for live interactive sessions — see
-  Hardening under `POST /api/resume`), secondary Stop button only on live
-  background sessions.
+  disabled "Already open elsewhere" for live interactive sessions /
+  disabled "Status unknown" when liveness couldn't be confirmed — see
+  Hardening under `POST /api/resume`).
+- No Stop button. It was in an earlier draft of this section but never
+  implemented or broken into a task; given everything this project has
+  already been through around spawning processes, adding a second
+  process-affecting endpoint (`/api/stop`) isn't worth it for a "nice to
+  have" — struck here so the spec matches the code.
 
 **Motion** (respecting `prefers-reduced-motion: reduce`)
 - Cards fade + slide up on load, staggered ~30ms per card.
@@ -211,10 +269,17 @@ Goal: a small tool that feels deliberately designed, not a debug page.
   ("Opening terminal for PHOENIX-18579…").
 
 **States**
-- Loading: skeleton cards, not a blank screen.
+- Loading: skeleton cards, not a blank screen — removed from the DOM once
+  the first real payload renders (an earlier version left them in
+  permanently on the happy path; fixed).
 - Empty: "No sessions found yet."
-- Error (`/api/sessions` fetch fails): inline banner with Retry — never a
-  blank page.
+- Error (`/api/sessions` fetch fails): inline banner with Retry on the
+  *first* load — never a blank page. On any later poll failure (once
+  cards are already showing), the header timestamp switches to a "stale ·
+  last updated …" label instead of silently continuing to say "just
+  now" — a poll failure must be visible, not invisible, since acting on
+  stale liveness data is exactly the kind of mistake this project is
+  trying to design out of itself.
 - Keyboard: all buttons reachable by Tab with a visible focus ring.
 
 **Polling:** re-fetch `/api/sessions` every 5s, diffing in place rather than
@@ -225,26 +290,71 @@ state on refresh.
 
 - Server binds explicitly to `127.0.0.1`, never `0.0.0.0`.
 - No authentication layer — acceptable, local-only and single-user (each
-  colleague runs their own instance against their own sessions).
+  colleague runs their own instance against their own sessions) — but see
+  the `Origin`/`Host` checks below, which are the actual thing standing
+  between this tool and any other web page open in the same browser.
+- `/api/resume` resolves `cwd`/`live`/`kind`/`id`/`name` itself by looking
+  the session up (by the one field it does trust, `sessionId`) in its own
+  fresh `GET /api/sessions` computation — it never trusts these fields as
+  supplied in the request body. This is the actual load-bearing property;
+  an earlier version trusted the body directly, which the final review
+  caught as not actually enforcing the guard below.
+- A live session is only ever actioned if it is `kind === 'background'`
+  **and** has a non-empty `id` — the one case proven safe (`claude attach
+  <id>`, a view, not a resume). Every other live session — interactive,
+  or background with a missing `id` — is refused (`400`), full stop. This
+  is an allowlist of the one safe case, not a blacklist of the one known-
+  bad case, so it can't be bypassed by a session shape nobody's thought of
+  yet.
+- Liveness itself can fail to be determined (the `claude` CLI times out,
+  isn't on PATH, or returns malformed output). This must never be treated
+  as "therefore not live" — `readLiveAgents()` returns `null` (distinct
+  from `[]`) on any failure, and any session whose liveness is unknown is
+  refused by `/api/resume` (`409`) and shown as un-actionable in the UI,
+  exactly like a confirmed-live interactive session. Fail closed, not open.
 - The server only reads files under `SESSIONS_ROOT`, and only ever spawns
   the one whitelisted `cmd /k` pattern with fields sourced from its own
-  `/api/sessions` output — no arbitrary command execution from frontend
-  input.
-- Any free-text field from the request body (e.g. `name`) that ends up in
-  a string later re-parsed by `cmd.exe` (the spawned window's title) is
-  sanitized to `[A-Za-z0-9 _.-]` before use — `cmd.exe /c` re-parses its
-  whole command line for its own metacharacters, so Node's argv quoting
-  alone does not neutralize them.
-- `/api/resume` rejects (`400`) any request whose `session.live === true
-  && session.kind === 'interactive'` before building or spawning anything
-  — see the Hardening note under `POST /api/resume` above.
+  server-side lookup — no arbitrary command execution from frontend input.
+- Any free-text field (e.g. `name`) that ends up in a string later
+  re-parsed by `cmd.exe` (the spawned window's title) is sanitized to
+  `[A-Za-z0-9 _.-]` before use, including every fallback path through that
+  sanitizer — `cmd.exe /c` re-parses its whole command line for its own
+  metacharacters, so Node's argv quoting alone does not neutralize them,
+  and a fallback that skips the filter reopens the same hole (this exact
+  regression was caught and fixed in Task 9's second fix round).
+- `POST /api/resume` and `GET /api/sessions` both reject (`403`) any
+  request whose `Host` header isn't `127.0.0.1:<port>` or
+  `localhost:<port>` (blocks DNS rebinding), and reject any request whose
+  `Origin` header is present and doesn't match that same allowlist (a
+  request with no `Origin` at all — curl, same-origin navigation — is
+  allowed). `POST /api/resume` additionally requires `Content-Type:
+  application/json`. Together these are what actually stop another web
+  page open in the same browser from silently calling this API — binding
+  to `127.0.0.1` alone only stops requests originating outside the
+  machine, not from software already running on it.
+- Both process-spawning calls (`spawn` for resume/attach, `exec` for the
+  startup browser-open) attach an `'error'` listener — `spawn`/`exec`
+  report launch failures asynchronously via an event that a surrounding
+  try/catch cannot see, so without this an OS-level spawn failure (e.g.
+  `cmd.exe` missing) would crash the whole server as an unhandled
+  rejection, the same failure class the crash-safety fix already closed
+  for malformed request bodies.
 - The server never crashes the whole process on a malformed or
   wrong-shaped request body; `/api/resume` validates the parsed body is a
-  non-null object with the required fields before use, and wraps the rest
+  non-null object with a string `sessionId` before use, and wraps the rest
   of its logic in try/catch.
 - `.env` (holding any machine-specific overrides) is gitignored; only
   `.env.example` (documented placeholders, no real paths) is committed —
-  relevant now that this is a shared repo, not a personal script.
+  relevant now that this is a shared repo, not a personal script. `.env`
+  is actually loaded now — a zero-dependency ~15-line parser in
+  `lib/config.mjs`, since no `dotenv`-style package is allowed and Node's
+  own `--env-file` flag would tie the `package.json` `start` script to a
+  specific Node version floor. Real environment variables still take
+  precedence over `.env` values, matching the usual dotenv convention.
+- **Windows only.** The spawn calls hardcode `cmd.exe`/`cmd /k`; a
+  colleague on macOS/Linux cannot run this as-is regardless of
+  `RESUME_COMMAND`/`ATTACH_COMMAND`, since the *outer* shell that opens a
+  new terminal window is not configurable. The README says so explicitly.
 
 ## Distribution
 
@@ -263,13 +373,16 @@ state on refresh.
 - Manual: kill one live session's process, confirm it drops out of `live`
   but keeps showing as `resumable`.
 - **Rule for verifying anything that spawns a process (Resume/Attach):
-  always use synthetic fake session data** (a made-up `sessionId` such as
-  `"test-1234"`, a `cwd` that need not exist) — never a real session's ID,
-  live or dead. Confirm the built command string and that a terminal
-  opens; there is no need to target a real session to prove the plumbing
-  works, and doing so risks real side effects (see the Hardening note
-  under `POST /api/resume`). This rule binds every task and every future
-  change to this project, not just Task 9.
+  always use synthetic fake session data** — never a real session's ID,
+  live or dead. Since `/api/resume` now resolves everything server-side
+  from `sessionId`, a synthetic test either targets a `sessionId` that
+  doesn't exist in the real session list (expect `404`) or exercises the
+  pure `buildResumeCommand`/`sanitizeTitle` logic directly with fabricated
+  session objects, as Tasks 7/8 already do — there is no need to target a
+  real session to prove the plumbing works, and doing so risks real side
+  effects (see the Hardening note under `POST /api/resume`). This rule
+  binds every task and every future change to this project, not just
+  Task 9.
 - No automated test suite — single-user local utility; manual verification
   against synthetic/read-only data (never a live spawn against a real
   session) is the right bar.
