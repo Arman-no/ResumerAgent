@@ -70,8 +70,56 @@ RESUME_COMMAND=docker exec -it my-claude-container claude --resume {sessionId}
 ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
 ```
 
+## Features
+
+- **Live + dead, one list.** Merges `claude agents --json --all` (live
+  background jobs) with a scan of transcript `.jsonl` files (everything,
+  live or dead) and the session registry (`sessions/<pid>.json`, the
+  source of truth for interactive liveness).
+- **Sorting.** Sorted by created-at, newest first, by default; switchable
+  from the toolbar.
+- **No Name fallback.** A session with no `/rename` and no recoverable
+  transcript title shows as "No Name" rather than a blank row — you can
+  still tell them apart by cwd, last-message preview, and age.
+- **Last message / recap preview.** Each row shows the last thing you
+  actually typed, or the away-summary recap if Claude Code generated one.
+- **Retired duplicates ("superseded").** If you rename a new session to
+  the same name as an old, larger one you're done with, the old one is
+  kept in the list (so you can still find and purge it) but marked
+  "moved to a newer session" and its Resume button disabled — it can
+  never be resumed by accident, and its transcript stops growing.
+- **Fail-closed safety.** If liveness can't be confirmed, Resume/Attach/
+  Purge are refused outright rather than guessed at. See "How it works"
+  below for the full model.
+
 ## How it works
 
-See `docs/2026-09-09-session-dashboard-design.md` for the full design.
+See `docs/2026-09-09-session-dashboard-design.md` for the full design
+history — it grew through many small revisions as real bugs were found,
+and explains the *why* behind each check below, not just the *what*.
+
 Short version: it reads Claude Code's own per-session registry files plus
 `claude agents --json --all`, merges them, and shows one dashboard.
+
+### Safety model
+
+- `liveUnknown` sessions (liveness couldn't be determined) are refused
+  for every action, both client-side (button disabled, no click handler)
+  and server-side (`canSafelyAct()` in `server.mjs`) — independently, so
+  a bug in one layer doesn't silently rely on the other.
+- Every `/api/resume` and `/api/purge` request re-derives the session's
+  current state server-side from a fresh lookup; the client's request
+  body is only ever a `sessionId` key, never trusted for anything
+  safety-relevant.
+- `superseded` sessions (see Features above) are refused for Resume —
+  not because resuming an old session is unsafe, but because it's
+  exactly the action that would grow a transcript you're trying to
+  retire.
+
+**Never test `/api/resume` or `/api/purge` against real session data** —
+use synthetic `.jsonl` fixtures if you're changing this code.
+
+### Architecture diagrams
+
+Generated with the [archify](https://github.com/tt-a1i/archify) skill —
+see `docs/diagrams/`.
