@@ -80,8 +80,10 @@ ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
 
 - **Live + dead, one list.** Merges `claude agents --json --all` (live
   background jobs) with a scan of transcript `.jsonl` files (everything,
-  live or dead) and the session registry (`sessions/<pid>.json`, the
-  source of truth for interactive liveness).
+  live or dead) and the session registry (`sessions/<pid>.json`) — the
+  registry is a secondary cross-check only, not the primary source: it's
+  deleted on a normal clean exit, so `claude agents` is what actually
+  decides `live`.
 - **Sorting.** Sorted by created-at, newest first, by default; switchable
   from the toolbar.
 - **No Name fallback.** A session with no `/rename` and no recoverable

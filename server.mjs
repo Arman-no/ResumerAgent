@@ -194,16 +194,34 @@ async function handleResume(req, res) {
     // set via `cwd` below rather than a `cd /d` prefix in the command
     // string, for the same reason — see the comment in lib/config.mjs.
     const fullLine = `start "${title}" cmd /k "${command}"`;
-    spawn(fullLine, {
+    const child = spawn(fullLine, {
       cwd: session.cwd,
       shell: true,
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
       env: envWithoutIdentity(),
-    })
-      .on('error', (err) => console.error('Failed to spawn resume terminal:', err))
-      .unref();
+    });
+    child.on('error', (err) => console.error('Failed to spawn resume terminal:', err));
+
+    // A blocked spawn (AppLocker/EDR refusing to let this process create a
+    // child on someone else's machine, not just a missing file) fails via
+    // an async 'error' event, never a thrown exception — reachable only
+    // caught by a review flagging a handover risk. Node fires that event on
+    // its own next tick at the earliest, so racing it against a short delay
+    // catches the near-instant "blocked before it even started" case
+    // without meaningfully delaying the real-success path.
+    const spawnError = await new Promise((resolve) => {
+      child.once('error', resolve);
+      setTimeout(() => resolve(null), 300);
+    });
+    child.unref();
+
+    if (spawnError) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Failed to open terminal: ${spawnError.message}` }));
+      return;
+    }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, command }));

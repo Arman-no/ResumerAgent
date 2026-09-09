@@ -406,7 +406,10 @@ Goal: a small tool that feels deliberately designed, not a debug page.
   timestamp — reflecting the timestamp of the last *successful* fetch, not
   "now" (an earlier version computed `relativeTime(Date.now())` at render
   time, which is always "just now" by construction and silently hid a
-  stale feed; fixed to store and reuse the actual fetch time).
+  stale feed; fixed to store and reuse the actual fetch time) — and a
+  shutdown icon-button (`POST /api/shutdown`) that stops the server process
+  itself, for when it was started from a shortcut with no visible console
+  window to Ctrl+C.
 - Responsive card grid (`repeat(auto-fill, minmax(300px, 1fr))`), one card
   per session: name (bold), status pill, `cwd` in monospace
   (ellipsis-truncated, full path on hover), relative last-active time,
