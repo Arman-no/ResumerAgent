@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>ResumerAgent</title>
+  <script>document.documentElement.dataset.theme = localStorage.getItem('resumeragent-theme') || 'dark';</script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -13,6 +14,12 @@
     </div>
     <div class="topbar-actions">
       <span id="last-refreshed" class="muted"></span>
+      <button id="theme-toggle-btn" class="icon-btn" title="Switch to light theme">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+        </svg>
+      </button>
       <button id="refresh-btn" class="icon-btn" title="Refresh now">
         <svg class="refresh-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -61,6 +68,10 @@
         <label class="filter-check">
           <input type="checkbox" data-status="unknown" checked />
           <span class="pill status-resumable" style="pointer-events:none">status unknown</span>
+        </label>
+        <label class="filter-check">
+          <input type="checkbox" data-status="superseded" checked />
+          <span class="pill status-superseded" style="pointer-events:none">retired</span>
         </label>
       </fieldset>
 
