@@ -209,9 +209,19 @@ strictly required (`node:http`, `node:child_process`, `node:fs`).
 real use on a corporate-managed Windows machine hit `corepack`'s pnpm
 install being blocked outright — `This program is blocked by group policy`
 — an IT-managed AppLocker/WDAC-style restriction on running an unsigned
-native binary, not fixable from this project. Since there's nothing to
-install anyway, npm is the documented path now; pnpm still works for
-anyone whose machine allows it.
+native binary, not fixable from this project's code. Since there's nothing
+to install anyway, npm needs zero setup and became the documented default;
+pnpm still works for anyone whose machine allows it as-is.
+**Revision (2026-09-09, later the same day):** the AppLocker block itself
+*is* fixable on the machine, not just avoidable — `corepack`'s pnpm
+download path is relocatable via `COREPACK_HOME`; pointing it at a
+directory already inside the AppLocker allow-list (`setx COREPACK_HOME
+"<allow-listed path>"`, new shell, retry `pnpm install`) resolves it
+cleanly. Confirmed working end to end afterward. Both package managers are
+therefore equally fine for everyday use once that one-time fix is applied;
+npm remains the only one that needs it for a desktop shortcut specifically,
+since `explorer.exe` doesn't pick up a `setx`-updated variable until it
+itself restarts — see `AGENT_SETUP.md` and `README.md`.
 
 ### `GET /`
 Serves `public/index.html` (which pulls in `styles.css` and `app.js` as

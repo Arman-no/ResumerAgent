@@ -25,12 +25,15 @@ detection) already hit once on the original dev machine.
   and for the resume/attach commands themselves
 
 This project has no runtime dependencies (`node:http`, `node:fs`,
-`node:child_process` only), so plain `npm` is all it needs. `pnpm` works
-too if you have it, but isn't required — and on a corporate-managed
-Windows machine, `corepack`'s pnpm install can fail with `This program is
-blocked by group policy`, since it downloads and runs an unsigned native
-binary. That's an IT policy decision, not something to work around here;
-just use `npm`.
+`node:child_process` only), so plain `npm` needs zero setup. `pnpm` works
+equally well if that's what you use — on a corporate-managed Windows
+machine, `corepack`'s default pnpm install path can fail with `This
+program is blocked by group policy` (AppLocker blocking an unsigned native
+binary outside its allow-list), which isn't fixable from this project's
+code, but is fixable on the machine: relocate it into an allow-listed
+directory with `setx COREPACK_HOME "<allow-listed path>"`, open a new
+shell, retry. See `AGENT_SETUP.md`'s troubleshooting table for the exact
+steps.
 
 ## Setup
 
@@ -44,15 +47,21 @@ This starts a server on `http://127.0.0.1:4317` and opens it in your
 browser. `Ctrl+C` to stop; nothing runs when you're not using it.
 
 **Desktop shortcut:** if you double-click a shortcut to launch this instead
-of running the command yourself, point it at `npm run launch` rather than
-`npm start`/`pnpm start`. `launch` first stops any previous ResumerAgent
-instance still bound to the port before starting a fresh one, so you're
-always looking at whatever code is currently on disk — plain `start` will
-silently keep an old instance running if one is already there. Either way,
-if a browser tab was already open before you relaunched, reload it — a tab
-never re-fetches its own already-loaded JavaScript on its own, though it
-will show a banner prompting you to reload once it notices the server
-restarted.
+of running the command yourself, point it at `npm run launch` — specifically
+`npm`, even if you use `pnpm` for everything else. First: `launch` stops any
+previous ResumerAgent instance still bound to the port before starting a
+fresh one, so you're always looking at whatever code is currently on disk —
+plain `start` (either package manager) will silently keep an old instance
+running if one is already there. Second, if you're on pnpm because of the
+`COREPACK_HOME` fix above: a shortcut's child process inherits its
+environment from `explorer.exe`, which doesn't re-read the registry until it
+itself restarts — so `setx COREPACK_HOME` only takes effect for *new
+terminal windows*, not for an already-running Explorer's shortcuts, until
+you log off/on. `npm` needs no such variable, so the shortcut stays
+unaffected either way. Either way, if a browser tab was already open before
+you relaunched, reload it — a tab never re-fetches its own already-loaded
+JavaScript on its own, though it will show a banner prompting you to reload
+once it notices the server restarted.
 
 ## Configuration
 
