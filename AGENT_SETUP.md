@@ -24,10 +24,20 @@ branch unless the user tells you to.
    installs and runs, but the live-session overlay and the Resume/Attach
    commands themselves won't work — tell the user, don't silently proceed as
    if it's fine.
+4. **Package manager: ask, don't assume.** This project has zero runtime
+   dependencies, so `npm` (ships with Node, zero setup) and `pnpm` (if the
+   user has it, via Corepack) both work equally well for every command
+   below — just use whichever one the user actually has/prefers, swapping
+   `npm` for `pnpm` throughout. If `pnpm install`/`corepack prepare` fails
+   with `This program is blocked by group policy`, that's AppLocker — see
+   the troubleshooting table below for the fix, don't just silently fall
+   back to `npm` without telling the user, since they may specifically want
+   pnpm.
 
 ## Install
 
-Run these from the repo root, in order:
+Run these from the repo root, in order (shown with `npm`; substitute `pnpm`
+throughout if that's the user's package manager):
 
 ```
 npm install
@@ -44,10 +54,24 @@ worked. `Ctrl+C` stops it.
 
 ## If the user wants a desktop shortcut
 
-Point it at `npm run launch`, **not** `npm start` or `pnpm start`. `launch`
-kills any previous instance already bound to the port before starting a
-fresh one — plain `start` silently leaves an old instance running if one
-exists, so the user ends up looking at stale code. See `README.md` for why.
+Point it at `npm run launch` — **specifically `npm`, even if the user
+normally uses `pnpm` everywhere else, and even if `pnpm run launch`**
+runs the identical underlying script. Two independent reasons, both real:
+
+1. `launch` kills any previous instance already bound to the port before
+   starting a fresh one — plain `start` (either package manager) silently
+   leaves an old instance running if one exists, so the user ends up
+   looking at stale code. See `README.md` for the full explanation.
+2. A shortcut's child process inherits its environment from `explorer.exe`,
+   which only re-reads the registry when it itself restarts (logoff/reboot,
+   or a manual `explorer.exe` restart) — not on every new process it spawns.
+   If the user set `COREPACK_HOME` via `setx` to work around AppLocker
+   (see the troubleshooting table) *after* their current Explorer session
+   started, a shortcut invoking `pnpm` will still fail to see that variable
+   and hit the AppLocker block again, even though a freshly-opened terminal
+   window picks it up fine. `npm` needs no such variable, so it's immune to
+   this staleness — that's the actual reason to prefer it for a shortcut
+   specifically, not a blanket "don't use pnpm."
 
 ## Troubleshooting — match the symptom, apply the fix, don't guess
 
@@ -85,7 +109,7 @@ exists, so the user ends up looking at stale code. See `README.md` for why.
 
 ## Done criteria
 
-You're finished when: `npm start` (or `npm run launch`) runs without error,
+You're finished when: `npm start`/`pnpm start` (or `npm run launch`) runs without error,
 the dashboard loads in a browser at `http://127.0.0.1:4317`, and it shows at
 least one real session from the user's actual `SESSIONS_ROOT`. If any of
 those three isn't true, you are not done — work the troubleshooting table
