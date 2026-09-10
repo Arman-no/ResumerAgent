@@ -1,4 +1,4 @@
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 const sessionListEl = document.getElementById('session-list');
 const emptyEl = document.getElementById('empty');
@@ -637,7 +637,7 @@ async function shutdownServer() {
     // error even though the shutdown itself succeeded — either way, the
     // next line stops polling a server we just told to stop existing.
   }
-  clearInterval(pollTimer);
+  clearTimeout(pollTimer);
   document.body.innerHTML = `
     <div class="empty">
       ResumerAgent has been shut down.<br />
@@ -664,10 +664,23 @@ themeToggleBtn.addEventListener('click', () => {
 });
 syncThemeButton();
 
-document.getElementById('refresh-btn').addEventListener('click', loadSessions);
-document.getElementById('retry-btn').addEventListener('click', loadSessions);
+// setTimeout-chained rather than setInterval so a manual refresh can push
+// the next automatic one back out to a full POLL_INTERVAL_MS away, instead
+// of an unrelated interval tick landing seconds later — the whole point of
+// a manual refresh button once the interval is minutes long, not seconds.
+async function pollAndReschedule() {
+  await loadSessions();
+  pollTimer = setTimeout(pollAndReschedule, POLL_INTERVAL_MS);
+}
+
+function refreshNow() {
+  clearTimeout(pollTimer);
+  pollAndReschedule();
+}
+
+document.getElementById('refresh-btn').addEventListener('click', refreshNow);
+document.getElementById('retry-btn').addEventListener('click', refreshNow);
 document.getElementById('shutdown-btn').addEventListener('click', shutdownServer);
 
 renderSkeleton();
-loadSessions();
-pollTimer = setInterval(loadSessions, POLL_INTERVAL_MS);
+pollAndReschedule();
