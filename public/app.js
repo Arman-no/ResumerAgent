@@ -103,7 +103,7 @@ function statusKey(session) {
 }
 
 function statusLabel(session) {
-  if (session.superseded) return 'moved to a newer session';
+  if (session.superseded) return 'retired';
   if (session.liveUnknown) return session.pidConfirmedAlive ? 'running elsewhere' : 'status unknown';
   return session.live ? `live · ${session.status}` : 'resumable';
 }
