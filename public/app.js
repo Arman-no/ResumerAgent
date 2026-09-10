@@ -39,10 +39,12 @@ const CONFIRM_LABEL = 'Click again to confirm';
 // waiting on a network round trip.
 let rawSessions = null;
 
+const STATUS_KEYS = ['live', 'resumable', 'unknown', 'superseded'];
+
 const filterState = {
   search: '',
   when: 'all',
-  statuses: new Set(['live', 'resumable', 'unknown']),
+  statuses: new Set(STATUS_KEYS),
   sortBy: 'createdAt-desc',
 };
 
@@ -87,11 +89,15 @@ function sessionSignature(session) {
   return JSON.stringify(session);
 }
 
-// The three states filterable in the sidebar — distinct from statusLabel
+// The four states filterable in the sidebar — distinct from statusLabel
 // below, which additionally shows *what* a live session is doing
 // (idle/busy/waiting). Filtering only needs the coarser live/resumable/
-// unknown split.
+// unknown/superseded split. superseded is checked first: it's a subset of
+// what would otherwise read as "resumable" (not live, liveness confirmed),
+// but nothing useful can be done with it besides purge, so it gets its own
+// filter instead of being silently lumped in with genuinely-resumable ones.
 function statusKey(session) {
+  if (session.superseded) return 'superseded';
   if (session.liveUnknown) return 'unknown';
   return session.live ? 'live' : 'resumable';
 }
@@ -212,6 +218,23 @@ function renderRow(row, session) {
     : session.live
     ? 'Attach'
     : 'Resume';
+  // Attach joins a session that's already running — it must never look
+  // like a second, equally-weighted "launch" button next to Resume, or it
+  // reads as "click to start another copy of this." Left unfilled/outlined
+  // instead of solid for that reason; the title spells out the difference
+  // for anyone who still isn't sure from the style alone.
+  const actionClass = disabled ? 'btn-secondary' : session.live ? 'btn-attach' : 'btn-primary';
+  const actionTitle = alreadyOpen
+    ? 'This session already has an open terminal elsewhere'
+    : session.superseded
+    ? "Retired — resuming would grow the old transcript this session's name was moved off of"
+    : session.liveUnknown
+    ? (session.pidConfirmedAlive
+      ? "Confirmed still running elsewhere, but claude agents isn't reporting it — refusing to act"
+      : 'Liveness could not be confirmed, so every action is refused')
+    : session.live
+    ? 'Opens a terminal joined to this already-running session — does not start a new one'
+    : 'Opens a new terminal and resumes this session';
   // A session can only be purged once it's confirmed dead — never live,
   // never liveUnknown (same fail-closed reasoning as the resume guard,
   // but stricter: purging a live background session's files out from
@@ -246,7 +269,7 @@ function renderRow(row, session) {
       <div class="row-id muted" title="Session ID">${escapeHtml(session.sessionId)}</div>
     </div>
     <div class="row-actions">
-      <button class="btn ${disabled ? 'btn-secondary' : 'btn-primary'}" data-action="resume" ${disabled ? 'disabled' : ''}>
+      <button class="btn ${actionClass}" data-action="resume" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>
         ${label}
       </button>
       ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="${DELETE_LABEL}" aria-label="${DELETE_LABEL}">${TRASH_ICON}</button>` : ''}
@@ -553,7 +576,7 @@ function syncStatusAllCheckbox() {
 function clearFilters() {
   filterState.search = '';
   filterState.when = 'all';
-  filterState.statuses = new Set(['live', 'resumable', 'unknown']);
+  filterState.statuses = new Set(STATUS_KEYS);
   filterState.sortBy = 'createdAt-desc';
   filterSearchEl.value = '';
   sortSelectEl.value = 'createdAt-desc';
@@ -622,6 +645,24 @@ async function shutdownServer() {
     </div>
   `;
 }
+
+const THEME_STORAGE_KEY = 'resumeragent-theme';
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
+
+function syncThemeButton() {
+  const isLight = document.documentElement.dataset.theme === 'light';
+  const title = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+  themeToggleBtn.title = title;
+  themeToggleBtn.setAttribute('aria-label', title);
+}
+
+themeToggleBtn.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+  syncThemeButton();
+});
+syncThemeButton();
 
 document.getElementById('refresh-btn').addEventListener('click', loadSessions);
 document.getElementById('retry-btn').addEventListener('click', loadSessions);

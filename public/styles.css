@@ -12,6 +12,26 @@
   --gray: #5b6270;
   --danger: #e05d5d;
   --radius: 10px;
+  /* A light tint over the row background on hover — needs a different sign
+     per theme (lighten on dark, darken on light) since "add a bit of white"
+     is invisible once the background is already near-white. */
+  --hover-tint: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #e2e5ea;
+  --text: #14161a;
+  --muted: #5b6270;
+  --accent: #6d5ce8;
+  --green: #2f9e64;
+  --blue: #3f72d1;
+  --amber: #b8791f;
+  --gray: #6b7280;
+  --danger: #d64545;
+  --hover-tint: rgba(0, 0, 0, 0.035);
 }
 
 * { box-sizing: border-box; }
@@ -258,7 +278,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   transition: transform 150ms ease-out;
 }
 .session-row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--hover-tint);
   transform: translateX(2px);
 }
 .session-row:hover::before { transform: scaleY(1); }
@@ -417,6 +437,17 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .btn-primary { background: var(--accent); color: white; }
 .btn-secondary { background: var(--border); color: var(--muted); }
 .btn-flash-success { background: var(--green) !important; transition: background 200ms ease-out; }
+/* Deliberately not filled like .btn-primary — Attach joins an
+   already-running session rather than starting a new one, and a solid CTA
+   button reads as "launch something", which is exactly the wrong signal
+   here (see the tooltip on this button for the full explanation). */
+.btn-attach {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  transition: background 150ms ease-out, transform 150ms ease-out, opacity 150ms ease-out;
+}
+.btn-attach:hover { background: rgba(124, 108, 232, 0.12); }
 
 .session-row.skeleton {
   min-height: 60px;
