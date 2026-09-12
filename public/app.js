@@ -137,10 +137,17 @@ function formatSize(bytes) {
 // Same green/yellow/red bands this user's own statusline already uses
 // (docs/2026-09-12-activity-observability-design.md) — reusing the
 // convention they already read at a glance rather than inventing another.
-function contextBand(pct) {
-  if (pct >= 90) return 'context-red';
-  if (pct >= 70) return 'context-yellow';
-  return 'context-green';
+// Returns the bare tier so both the context bar (background-colored) and
+// the rate-limit numbers (text-colored) can build their own class name
+// from it, instead of duplicating the 70/90 thresholds in two places —
+// design-review finding: rate-limit % previously carried no color coding
+// at all despite representing the exact same "how close to a ceiling"
+// concept this whole panel exists to surface (see the design doc's
+// Problem section: "whether a session is near its rate limit").
+function usageBand(pct) {
+  if (pct >= 90) return 'red';
+  if (pct >= 70) return 'yellow';
+  return 'green';
 }
 
 // Only fires inside the design doc's warning window (<=5 days) — a normal
@@ -154,19 +161,39 @@ function expiryBadgeHtml(session) {
   return `<span class="expiry-badge ${urgent ? 'expiry-urgent' : ''}" title="Claude Code's own cleanup (cleanupPeriodDays) will delete this transcript soon unless it's touched again">⚠ ${escapeHtml(label)}</span>`;
 }
 
-// Cost + context share a line (matches the approved sketch: "💰 $73.65
-// ⬛⬛⬛⬛░░░░░░ 44% ctx"). Returns '' when neither is available, so the
-// caller can fall back to a placeholder instead of rendering an empty line.
+// Cost + context share a line. No leading icon glyph — checked against
+// this app's own established convention for a line of small inline stats
+// (.row-sub: badge/branch/size, separated by "·", no icons) rather than
+// its separate convention for standalone action buttons (theme toggle,
+// refresh, purge — those *are* icon-only, but they're controls, not a
+// stats readout). The design-review pass flagged the previous 💰/📊
+// emoji as the one part of this strip that didn't fit either convention:
+// full-color OS glyphs in an app where every other icon is a hand-drawn
+// monochrome stroke SVG using currentColor, un-themeable and read aloud
+// by name ("money bag") ahead of the actual text by a screen reader.
+// Dropping them outright — not swapping in two new SVGs — is the smaller,
+// more consistent fix: it makes this line match row-sub's own plain-text
+// pattern exactly, rather than inventing a third icon convention.
+// Returns '' when neither is available, so the caller can fall back to a
+// placeholder instead of rendering an empty line.
 function costContextLineHtml(session) {
   const items = [];
   if (typeof session.costUsd === 'number') {
-    items.push(`<span class="activity-item" title="Total cost so far this session">💰 $${session.costUsd.toFixed(2)}</span>`);
+    items.push(`<span class="activity-item" title="Total cost so far this session">$${session.costUsd.toFixed(2)}</span>`);
   }
   if (typeof session.contextUsedPercent === 'number') {
     const pct = Math.round(session.contextUsedPercent);
+    // "/200k" dropped from the tooltip — no longer true for every session
+    // since lib/transcriptPreview.mjs now sizes the window per the
+    // session's own model (1M for current-gen models, 200k otherwise).
+    // The auto-compaction note answers the confusion a 100% reading
+    // actually caused in real use (captured verbatim in a real session's
+    // own preview text during this design pass: "why for some agents...
+    // is it shoing 100% ctx? it's unclear... better to have more
+    // clarity") — the number was in that case correct, just unexplained.
     items.push(`
-      <span class="activity-item context-item" title="Approx. context window used (last turn's input + cache tokens / 200k)">
-        <span class="context-bar-track"><span class="context-bar-fill ${contextBand(session.contextUsedPercent)}" style="width:${Math.min(100, session.contextUsedPercent)}%"></span></span>
+      <span class="activity-item context-item" title="Approx. context window used, sized to this session's own model — Claude Code compacts automatically as this nears 100%">
+        <span class="context-bar-track"><span class="context-bar-fill context-${usageBand(session.contextUsedPercent)}" style="width:${Math.min(100, session.contextUsedPercent)}%"></span></span>
         ${pct}% ctx
       </span>
     `);
@@ -180,14 +207,34 @@ function costContextLineHtml(session) {
 // most installs won't have one (see activityStripHtml's placeholder for
 // that case). Account-wide, not per-session — every session with a
 // sidecar should show the same percentage, which is expected, not a bug
-// (see the design doc's note on why these aren't additive across sessions).
+// (see the design doc's note on why these aren't additive across
+// sessions) — but sidecars refresh independently per session, so two
+// sessions can legitimately disagree by however much account usage moved
+// between their last refreshes. Design-review pass caught exactly that in
+// real data (5h% ranged 1%-11% across sessions with no explanation), so
+// the reading now carries its own "as of" freshness alongside the number,
+// same idea as relativeTime() elsewhere on the row, rather than presenting
+// every sidecar's number as equally current.
 function rateLimitLineHtml(session) {
   const rl = session.rateLimits;
   const items = [];
-  if (typeof rl?.five_hour?.used_percentage === 'number') items.push(`5h ${Math.round(rl.five_hour.used_percentage)}%`);
-  if (typeof rl?.seven_day?.used_percentage === 'number') items.push(`7d ${Math.round(rl.seven_day.used_percentage)}%`);
+  if (typeof rl?.five_hour?.used_percentage === 'number') {
+    items.push(`<span class="rate-value rate-${usageBand(rl.five_hour.used_percentage)}">5h: ${Math.round(rl.five_hour.used_percentage)}%</span>`);
+  }
+  if (typeof rl?.seven_day?.used_percentage === 'number') {
+    items.push(`<span class="rate-value rate-${usageBand(rl.seven_day.used_percentage)}">7d: ${Math.round(rl.seven_day.used_percentage)}%</span>`);
+  }
   if (items.length === 0) return '';
-  return `<div class="activity-line"><span class="activity-item" title="Account-wide rate limit usage, from the statusline sidecar">📊 ${items.join('  ·  ')}</span></div>`;
+  // Not .muted — that class also bumps font-size to 13px (sized for the
+  // 13px-context row-sub line it was written for), which would make this
+  // note the one oversized thing in an otherwise uniform 12px strip.
+  const freshness = typeof session.rateLimitsUpdatedAt === 'number'
+    ? ` <span class="activity-freshness">(as of ${relativeTime(session.rateLimitsUpdatedAt)})</span>`
+    : '';
+  // Labeled explicitly ("Rate limit —") rather than left as bare "5h 6% ·
+  // 7d 6%" — on its own that read as an unexplained stat with no indication
+  // it's Claude plan usage rather than, say, session progress or disk use.
+  return `<div class="activity-line"><span class="activity-item" title="Your Claude plan's rolling rate-limit usage (account-wide, from the statusline sidecar) — not a per-session number, and only as fresh as that sidecar's last write">Rate limit — ${items.join(' · ')}</span>${freshness}</div>`;
 }
 
 // Groups cost/context/rate-limits into one small labeled, visually boxed

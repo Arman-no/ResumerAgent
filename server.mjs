@@ -88,6 +88,14 @@ async function getSessionsPayload() {
       costUsd: sidecar?.cost?.total_cost_usd ?? session.costUsd,
       contextUsedPercent: sidecar?.context_window?.used_percentage ?? session.contextUsedPercent,
       rateLimits: sidecar?.rate_limits ?? null,
+      // Rate limits have no other source (see the comment above readActivitySidecar's
+      // import) so, unlike cost/context, there's no "at least it's this session's own
+      // last real turn" fallback freshness to lean on — this is the only signal the UI
+      // has for how stale a rate-limit reading might be. Sidecar writes `updated_at` as
+      // Unix seconds (its statusline.ps1 writer's own convention); every other timestamp
+      // this app hands the frontend (updatedAt, createdAt) is milliseconds, so convert
+      // here rather than pushing the unit mismatch onto every consumer.
+      rateLimitsUpdatedAt: sidecar?.updated_at ? sidecar.updated_at * 1000 : null,
     };
   });
 }
