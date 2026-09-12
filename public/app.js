@@ -134,6 +134,65 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+// Same green/yellow/red bands this user's own statusline already uses
+// (docs/2026-09-12-activity-observability-design.md) — reusing the
+// convention they already read at a glance rather than inventing another.
+function contextBand(pct) {
+  if (pct >= 90) return 'context-red';
+  if (pct >= 70) return 'context-yellow';
+  return 'context-green';
+}
+
+// Only fires inside the design doc's warning window (<=5 days) — a normal
+// session shows nothing here at all, deliberately: the point is "no visual
+// noise" until it's actually worth interrupting on.
+function expiryBadgeHtml(session) {
+  const days = session.daysUntilExpiry;
+  if (days == null || days > 5) return '';
+  const urgent = days <= 1;
+  const label = days <= 0 ? 'expires imminently' : `expires in ${Math.max(1, Math.floor(days))}d`;
+  return `<span class="expiry-badge ${urgent ? 'expiry-urgent' : ''}" title="Claude Code's own cleanup (cleanupPeriodDays) will delete this transcript soon unless it's touched again">⚠ ${escapeHtml(label)}</span>`;
+}
+
+// Rate-limit numbers only ever show up when the optional statusline
+// sidecar (lib/activitySidecar.mjs) has written one for this session —
+// most installs won't have one, so this renders nothing rather than an
+// "n/a" on every single row (see the activity design doc's
+// sidecar-vs-transcript tradeoff). Account-wide, not per-session — every
+// session with a sidecar should show the same percentage, which is
+// expected, not a bug (see the design doc's note on why these aren't
+// additive across sessions).
+function rateLimitHtml(session) {
+  const rl = session.rateLimits;
+  const items = [];
+  if (typeof rl?.five_hour?.used_percentage === 'number') items.push(`5h ${Math.round(rl.five_hour.used_percentage)}%`);
+  if (typeof rl?.seven_day?.used_percentage === 'number') items.push(`7d ${Math.round(rl.seven_day.used_percentage)}%`);
+  if (items.length === 0) return '';
+  return `<span class="activity-item" title="Account-wide rate limit usage, from the statusline sidecar">${items.join(' · ')}</span>`;
+}
+
+function activityRowHtml(session) {
+  const parts = [];
+  if (typeof session.costUsd === 'number') {
+    parts.push(`<span class="activity-item" title="Total cost so far this session">$${session.costUsd.toFixed(2)}</span>`);
+  }
+  if (typeof session.contextUsedPercent === 'number') {
+    const pct = Math.round(session.contextUsedPercent);
+    parts.push(`
+      <span class="activity-item context-item" title="Approx. context window used (last turn's input + cache tokens / 200k)">
+        <span class="context-bar-track"><span class="context-bar-fill ${contextBand(session.contextUsedPercent)}" style="width:${Math.min(100, session.contextUsedPercent)}%"></span></span>
+        ${pct}%
+      </span>
+    `);
+  }
+  const rateLimit = rateLimitHtml(session);
+  if (rateLimit) parts.push(rateLimit);
+  const expiry = expiryBadgeHtml(session);
+  if (expiry) parts.push(expiry);
+  if (parts.length === 0) return '';
+  return `<div class="row-activity muted">${parts.join('')}</div>`;
+}
+
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -266,6 +325,7 @@ function renderRow(row, session) {
         ${sizeLabel ? `<span>· ${sizeLabel}</span>` : ''}
       </div>
       ${session.preview ? `<p class="row-preview">${escapeHtml(session.preview)}</p>` : ''}
+      ${activityRowHtml(session)}
       <div class="row-id muted" title="Session ID">${escapeHtml(session.sessionId)}</div>
     </div>
     <div class="row-actions">
