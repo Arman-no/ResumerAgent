@@ -12,6 +12,7 @@ import { readTranscriptPreview, readTranscriptPreviewFromFile } from './lib/tran
 import { mergeSessions } from './lib/mergeSessions.mjs';
 import { buildResumeCommand } from './lib/resumeCommand.mjs';
 import { purgeSessionFiles } from './lib/purgeSession.mjs';
+import { pauseBackgroundSession } from './lib/pauseSession.mjs';
 import { envWithoutIdentity } from './lib/cleanEnv.mjs';
 import { computeDaysUntilExpiry } from './lib/expiry.mjs';
 import { readActivitySidecar } from './lib/activitySidecar.mjs';
@@ -172,6 +173,16 @@ function canSafelyAct(session) {
   if (session.superseded) return false;
   if (!session.live) return true;
   return session.kind === 'background' && typeof session.id === 'string' && session.id.length > 0;
+}
+
+// Pause is only ever `claude stop <id>` against a live background job —
+// the exact same shape Attach already requires (see buildResumeCommand's
+// useAttach), so it reuses canSafelyAct's allowlist rather than
+// re-deriving it. An interactive session has no id and no external stop
+// surface at all, so it always falls through to false here, same as it
+// already does for Resume/Attach.
+function canPause(session) {
+  return session.live && canSafelyAct(session);
 }
 
 async function handleResume(req, res) {
@@ -338,6 +349,58 @@ async function handlePurge(req, res) {
   }
 }
 
+async function handlePause(req, res) {
+  let body;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    res.writeHead(413).end('Request body too large');
+    return;
+  }
+
+  let requestBody;
+  try {
+    requestBody = JSON.parse(body);
+  } catch {
+    res.writeHead(400).end('Invalid JSON');
+    return;
+  }
+
+  if (
+    requestBody === null ||
+    typeof requestBody !== 'object' ||
+    Array.isArray(requestBody) ||
+    typeof requestBody.sessionId !== 'string'
+  ) {
+    res.writeHead(400).end('Invalid request: expected an object with sessionId');
+    return;
+  }
+
+  // Same server-side lookup pattern as /api/resume and /api/purge — the
+  // body's sessionId is only ever a key into our own fresh view.
+  const sessions = await getSessionsPayload();
+  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
+
+  if (!session) {
+    res.writeHead(404).end('Unknown session');
+    return;
+  }
+
+  if (!canPause(session)) {
+    res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to pause this session');
+    return;
+  }
+
+  try {
+    await pauseBackgroundSession(session.id);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
+}
+
 // Closing a browser tab doesn't touch the server process at all — it's
 // independent, launched from its own console window, and stays up until
 // that window closes or something tells it to stop. This is the "tell it
@@ -404,6 +467,24 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       await handlePurge(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err) }));
+      } else {
+        res.end();
+      }
+    }
+    return;
+  }
+
+  if (req.url === '/api/pause' && req.method === 'POST') {
+    if (req.headers['content-type'] !== 'application/json') {
+      res.writeHead(415).end('Unsupported Content-Type');
+      return;
+    }
+    try {
+      await handlePause(req, res);
     } catch (err) {
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
