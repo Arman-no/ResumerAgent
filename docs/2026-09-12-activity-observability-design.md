@@ -25,6 +25,17 @@ both options from "What's already available" were built, not just one:
    within the first few KB, which was silently short-circuiting the scan
    before it ever reached back far enough. Both fixes are in
    `lib/transcriptPreview.mjs` with comments explaining why.
+   **Update (2026-09-12, later same day):** the blind `/ 200_000` this
+   paragraph describes turned out to be a real bug, not just a documented
+   ceiling — it silently clamped any session that had actually
+   accumulated >200k real tokens, or that ran on a current-gen model
+   (1M context is the *default* for most of them, not an opt-in beta),
+   to a maxed-red 100% bar. Confirmed against 9 real local sessions: 5 of
+   9 were rendering a false 100% before the fix. Fixed by reading
+   `message.model` off the same assistant line and deriving the real
+   window size from a small model-generation table instead of one flat
+   constant — see `EXTENDED_CONTEXT_MODEL_PREFIXES` in
+   `lib/transcriptPreview.mjs`. `CONTEXT_WINDOW_TOKENS` no longer exists.
    **This alone cannot recover rate-limit data at all** — confirmed while
    implementing, not just asserted: `rate_limits.*` has no transcript
    representation of any kind, only ever computed for the statusline JSON.

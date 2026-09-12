@@ -353,13 +353,18 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
    reading as one undifferentiated run of numbers. Fixed min-height covers
    both its own two-line case and the single-line empty-state placeholder,
    so a card with no sidecar data yet is the same height as one with full
-   data instead of the list looking jagged. */
+   data instead of the list looking jagged.
+   min-height measured against the real two-line render (49.3px, both lines
+   present + the 4px gap + 12px vertical padding), not assumed — the prior
+   42px only matched the shorter one-line placeholder case and let a
+   mixed list of full/placeholder cards visibly step by ~7px card to card,
+   which is exactly the jaggedness this rule says it prevents. */
 .activity-strip {
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 4px;
-  min-height: 42px;
+  min-height: 50px;
   margin: 4px 0 2px;
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -379,6 +384,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 }
 .activity-line.muted { color: var(--muted); font-style: italic; }
 .activity-item { display: inline-flex; align-items: center; gap: 6px; }
+.activity-freshness { color: var(--muted); }
 
 .context-bar-track {
   width: 44px;
@@ -392,6 +398,16 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .context-green { background: var(--green); }
 .context-yellow { background: var(--amber); }
 .context-red { background: var(--danger); }
+
+/* Text-color counterparts of the same green/yellow/red bands above, for
+   the rate-limit percentages — same thresholds (usageBand() in app.js),
+   just `color` instead of `background` since there's no bar to fill here.
+   Design-review finding: these numbers previously carried no color coding
+   at all, the one place in the strip that didn't apply the threshold
+   convention the context bar already established. */
+.rate-value.rate-green { color: var(--green); }
+.rate-value.rate-yellow { color: var(--amber); }
+.rate-value.rate-red { color: var(--danger); }
 
 .expiry-badge {
   color: var(--amber);
