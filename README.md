@@ -121,6 +121,16 @@ ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
   persisted in `localStorage` and applied before first paint (no flash of
   the wrong theme). See `MASTER.md` for the full design system if you're
   touching any UI/CSS.
+- **Pause a live background job.** A live *background* session (one
+  started with `claude --bg`, the only kind with a stoppable id) gets a
+  Pause button next to Attach, two-click confirm like Purge. It runs
+  Claude Code's own `claude stop <id>` — not a process kill this app
+  invented — so the conversation is kept exactly as `claude stop --help`
+  documents: `claude attach <id>` or `claude --resume` both work again
+  once it's stopped. There is no Pause for interactive sessions — those
+  are a terminal someone has open, and Claude Code exposes no external
+  stop surface for that at all. See
+  `docs/2026-09-13-pause-session-design.md`.
 
 ## Activity panel
 
@@ -175,22 +185,35 @@ Short version: it reads Claude Code's own per-session registry files plus
   for every action, both client-side (button disabled, no click handler)
   and server-side (`canSafelyAct()` in `server.mjs`) — independently, so
   a bug in one layer doesn't silently rely on the other.
-- Every `/api/resume` and `/api/purge` request re-derives the session's
-  current state server-side from a fresh lookup; the client's request
-  body is only ever a `sessionId` key, never trusted for anything
-  safety-relevant.
+- Every `/api/resume`, `/api/purge`, and `/api/pause` request re-derives
+  the session's current state server-side from a fresh lookup; the
+  client's request body is only ever a `sessionId` key, never trusted for
+  anything safety-relevant.
 - `superseded` sessions (see Features above) are refused for Resume —
   not because resuming an old session is unsafe, but because it's
   exactly the action that would grow a transcript you're trying to
   retire.
+- `/api/pause` reuses the same `canSafelyAct()` allowlist Attach already
+  requires (live, not `liveUnknown`, not `superseded`, `kind ===
+  'background'`, a real `id`) — see
+  `docs/2026-09-13-pause-session-design.md` for why an interactive
+  session can never satisfy it.
 
-**Never test `/api/resume` or `/api/purge` against real session data** —
-use synthetic `.jsonl` fixtures if you're changing this code.
+**Never test `/api/resume`, `/api/purge`, or `/api/pause` against real
+session data you care about** — use synthetic `.jsonl` fixtures, or (for
+pause, verified 2026-09-13) a disposable `claude --bg` job you don't mind
+stopping, never a real one.
 
 ### Architecture diagrams
 
 Generated with the [archify](https://github.com/tt-a1i/archify) skill —
-see `docs/diagrams/`.
+see `docs/diagrams/`. **Stale as of 2026-09-13**: they predate the
+activity panel, expiry warning, MASTER.md design system, and the pause
+feature (last content match is `lib/liveAgents.mjs`, from the 2026-09-09
+build). Regenerate with the archify skill next time it's installed
+somewhere with access to this repo — it wasn't available in the session
+that did this round of work, and hand-editing a generated diagram file
+isn't a safe substitute.
 
 ### Design system
 

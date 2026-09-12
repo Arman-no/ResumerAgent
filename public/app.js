@@ -30,9 +30,16 @@ const TRASH_ICON = `
     <path d="M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
   </svg>
 `;
+const PAUSE_ICON = `
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="6" y="5" width="4" height="14" rx="1" />
+    <rect x="14" y="5" width="4" height="14" rx="1" />
+  </svg>
+`;
 const SPINNER_ICON = `<span class="btn-icon-spinner"></span>`;
 
 const DELETE_LABEL = 'Delete session';
+const PAUSE_LABEL = 'Pause session';
 const CONFIRM_LABEL = 'Click again to confirm';
 
 // Sessions as last returned by the server — filters below never re-fetch,
@@ -65,16 +72,28 @@ let lastRefreshedAt = null;
 // tab's own app.js has no way to reload itself.
 let knownServerStartedAt = null;
 
-// sessionId -> pending confirm-window timeout, for the two-click purge
-// confirmation below.
+// sessionId -> pending confirm-window timeout, for the two-click purge and
+// pause confirmations below — one Map per action, since a session could in
+// principle have both a live-session pause and (after it drops out of
+// live) a purge armed across separate polls, and they must not clear each
+// other.
 const purgeConfirmTimers = new Map();
+const pauseConfirmTimers = new Map();
 
-function clearPurgeConfirm(sessionId) {
-  const timerId = purgeConfirmTimers.get(sessionId);
+function clearConfirmTimer(timers, sessionId) {
+  const timerId = timers.get(sessionId);
   if (timerId) {
     clearTimeout(timerId);
-    purgeConfirmTimers.delete(sessionId);
+    timers.delete(sessionId);
   }
+}
+
+function clearPurgeConfirm(sessionId) {
+  clearConfirmTimer(purgeConfirmTimers, sessionId);
+}
+
+function clearPauseConfirm(sessionId) {
+  clearConfirmTimer(pauseConfirmTimers, sessionId);
 }
 
 function sessionKey(s) {
@@ -443,6 +462,14 @@ function renderRow(row, session) {
   // but stricter: purging a live background session's files out from
   // under it has no safe analog to "attach", so there is no exception).
   const canPurge = !session.live && !session.liveUnknown;
+  // Mirrors server.mjs's canPause (session.live && canSafelyAct(session))
+  // — this is only the client-side half of that defense; the server
+  // re-resolves the session itself and re-checks independently before
+  // ever running `claude stop`. Only a live background job has a
+  // stoppable id at all, so this and canPurge are mutually exclusive and
+  // never both render on the same row.
+  const canPause = session.live && !session.liveUnknown && !session.superseded
+    && session.kind === 'background' && typeof session.id === 'string' && session.id.length > 0;
   const sizeLabel = formatSize(session.sizeBytes);
 
   // The row (and any armed confirm state) is about to be torn down and
@@ -453,6 +480,7 @@ function renderRow(row, session) {
   // renderSessions) specifically so this line is never reached while
   // armed — this is just the fallback for every other case.
   clearPurgeConfirm(session.sessionId);
+  clearPauseConfirm(session.sessionId);
   row.classList.toggle('superseded-row', Boolean(session.superseded));
 
   row.innerHTML = `
@@ -477,11 +505,15 @@ function renderRow(row, session) {
       <button class="btn ${actionClass}" data-action="resume" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>
         ${label}
       </button>
+      ${canPause ? `<button class="icon-btn icon-btn-pause" data-action="pause" title="${PAUSE_LABEL}" aria-label="${PAUSE_LABEL}">${PAUSE_ICON}</button>` : ''}
       ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="${DELETE_LABEL}" aria-label="${DELETE_LABEL}">${TRASH_ICON}</button>` : ''}
     </div>
   `;
   if (!disabled) {
     row.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
+  }
+  if (canPause) {
+    row.querySelector('[data-action="pause"]').addEventListener('click', (event) => handlePauseClick(session, event.currentTarget));
   }
   if (canPurge) {
     row.querySelector('[data-action="purge"]').addEventListener('click', (event) => handlePurgeClick(session, event.currentTarget));
@@ -593,18 +625,19 @@ async function purgeSession(session, button) {
   }
 }
 
-// Two-click confirmation: the first click arms a short window during
-// which a second click on the same button actually purges. Arming briefly
-// disables the button so a fast, accidental double-click can't land both
-// clicks before a person could realistically react to the visual change.
-// aria-label is updated alongside title — an aria-label, once present,
-// takes over the accessible name entirely, so updating only `title` (as a
-// mouse-hover tooltip) would be invisible to keyboard/screen-reader users.
-function handlePurgeClick(session, button) {
+// Two-click confirmation shared by purge and pause: the first click arms a
+// short window during which a second click on the same button actually
+// fires the action. Arming briefly disables the button so a fast,
+// accidental double-click can't land both clicks before a person could
+// realistically react to the visual change. aria-label is updated
+// alongside title — an aria-label, once present, takes over the
+// accessible name entirely, so updating only `title` (as a mouse-hover
+// tooltip) would be invisible to keyboard/screen-reader users.
+function handleConfirmClick({ timers, session, button, normalLabel, onConfirm }) {
   const key = session.sessionId;
-  if (purgeConfirmTimers.has(key)) {
-    clearPurgeConfirm(key);
-    purgeSession(session, button);
+  if (timers.has(key)) {
+    clearConfirmTimer(timers, key);
+    onConfirm();
     return;
   }
 
@@ -614,16 +647,64 @@ function handlePurgeClick(session, button) {
   button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
   button.disabled = true;
   setTimeout(() => {
-    if (purgeConfirmTimers.has(key)) button.disabled = false;
+    if (timers.has(key)) button.disabled = false;
   }, 400);
   const timerId = setTimeout(() => {
-    purgeConfirmTimers.delete(key);
-    button.title = DELETE_LABEL;
-    button.setAttribute('aria-label', DELETE_LABEL);
+    timers.delete(key);
+    button.title = normalLabel;
+    button.setAttribute('aria-label', normalLabel);
     button.classList.remove('armed');
     button.disabled = false;
   }, 5000);
-  purgeConfirmTimers.set(key, timerId);
+  timers.set(key, timerId);
+}
+
+function handlePurgeClick(session, button) {
+  handleConfirmClick({
+    timers: purgeConfirmTimers,
+    session,
+    button,
+    normalLabel: DELETE_LABEL,
+    onConfirm: () => purgeSession(session, button),
+  });
+}
+
+function handlePauseClick(session, button) {
+  handleConfirmClick({
+    timers: pauseConfirmTimers,
+    session,
+    button,
+    normalLabel: PAUSE_LABEL,
+    onConfirm: () => pauseSession(session, button),
+  });
+}
+
+// Unlike purgeSession's optimistic local removal (a file move this client
+// already knows succeeded), pausing changes what `claude agents` itself
+// reports — real external state this client hasn't polled yet — so success
+// triggers a real refetch instead of guessing the row's new shape locally.
+async function pauseSession(session, button) {
+  button.disabled = true;
+  button.classList.remove('armed');
+  button.innerHTML = SPINNER_ICON;
+  try {
+    const res = await fetch('/api/pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.sessionId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    showToast(`Paused ${session.name} — resume it anytime, right where it left off`);
+    refreshNow();
+  } catch {
+    showToast(`Failed to pause ${session.name}`);
+    button.disabled = false;
+    button.innerHTML = PAUSE_ICON;
+    button.title = PAUSE_LABEL;
+    button.setAttribute('aria-label', PAUSE_LABEL);
+    button.classList.add('shake');
+    button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
+  }
 }
 
 function renderSkeleton() {
@@ -648,12 +729,12 @@ function renderSessions(sessions) {
     let row = rowsByKey.get(key);
     const signature = sessionSignature(session);
     if (row) {
-      // A row with an armed purge-confirm timer is left untouched: a
-      // routine poll or filter change re-rendering it from scratch would
-      // call clearPurgeConfirm() (top of renderRow) and rebuild a fresh,
-      // unarmed button, silently defeating the two-click confirmation the
-      // user is mid-way through.
-      if (purgeConfirmTimers.has(key)) {
+      // A row with an armed purge- or pause-confirm timer is left
+      // untouched: a routine poll or filter change re-rendering it from
+      // scratch would call clearPurgeConfirm()/clearPauseConfirm() (top of
+      // renderRow) and rebuild a fresh, unarmed button, silently defeating
+      // the two-click confirmation the user is mid-way through.
+      if (purgeConfirmTimers.has(key) || pauseConfirmTimers.has(key)) {
         // leave as-is
       } else if (rowSignatures.get(key) !== signature) {
         renderRow(row, session);

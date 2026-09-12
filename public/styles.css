@@ -179,6 +179,24 @@ body {
   border-color: var(--critical);
 }
 
+/* Warning, not critical — pausing a background job is fully resumable
+   (`claude stop` keeps its conversation), unlike purge. armed uses
+   --on-accent rather than white: computed contrast of white-on-warning is
+   ~2:1 in both themes (fails even the 3:1 non-text/icon threshold, unlike
+   the danger button's white-on-critical at ~3.3:1) — on-accent clears
+   ~9.5:1 dark / ~5.3:1 light. */
+.icon-btn-pause {
+  color: var(--warning);
+  border-color: rgba(var(--warning-rgb), 0.35);
+  transition: transform 150ms ease-out, background 150ms ease-out, color 150ms ease-out;
+}
+.icon-btn-pause:hover { background: rgba(var(--warning-rgb), 0.12); }
+.icon-btn-pause.armed {
+  background: var(--warning);
+  color: var(--on-accent);
+  border-color: var(--warning);
+}
+
 /* Layout: filter sidebar + session list, side by side */
 .layout {
   display: flex;
