@@ -10,6 +10,10 @@
   --text-muted: #868C95;
   --accent: #45B8CC;
   --accent-soft: #173238;
+  /* Text-only variant of --accent — see [data-theme="light"] below for why
+     it needs to differ from --accent there. Equal to --accent here: dark
+     mode's plain-text accent usage already clears 4.5:1, nothing to fix. */
+  --accent-text: var(--accent);
   --success: #5FBF8A;
   --warning: #E0B04A;
   --critical: #E0685A;
@@ -62,6 +66,12 @@
   --text-muted: #5B6570;
   --accent: #1C8DA3;
   --accent-soft: #DCF0F3;
+  /* --accent itself (#1C8DA3) stays the validated hex for non-text uses
+     (borders, the sparkline line) — design-audit measured it at 3.43:1 on
+     --bg / 3.90:1 on --surface as plain text, short of WCAG's 4.5:1. This
+     darkened variant is for text only (links, .btn-attach's label): 4.93:1
+     on --bg, 5.60:1 on --surface. */
+  --accent-text: #17727F;
   --success: #2F9E68;
   --warning: #B8860F;
   --critical: #C23B2E;
@@ -250,7 +260,7 @@ body {
 .link-btn {
   background: none;
   border: none;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 12px;
   cursor: pointer;
   padding: 0;
@@ -284,10 +294,10 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  padding: var(--space-24);
+  padding: var(--space-16);
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
+  gap: var(--space-4);
   transition: border-color 180ms ease-out;
 }
 .stat-card:hover { border-color: var(--accent); }
@@ -301,7 +311,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 }
 .stat-value {
   font-family: var(--font-mono);
-  font-size: 34px;
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.1;
   color: var(--text);
@@ -624,7 +634,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
    here (see the tooltip on this button for the full explanation). */
 .btn-attach {
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 1px solid var(--accent);
   transition: background 150ms ease-out, opacity 150ms ease-out;
 }
