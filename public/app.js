@@ -154,43 +154,61 @@ function expiryBadgeHtml(session) {
   return `<span class="expiry-badge ${urgent ? 'expiry-urgent' : ''}" title="Claude Code's own cleanup (cleanupPeriodDays) will delete this transcript soon unless it's touched again">⚠ ${escapeHtml(label)}</span>`;
 }
 
+// Cost + context share a line (matches the approved sketch: "💰 $73.65
+// ⬛⬛⬛⬛░░░░░░ 44% ctx"). Returns '' when neither is available, so the
+// caller can fall back to a placeholder instead of rendering an empty line.
+function costContextLineHtml(session) {
+  const items = [];
+  if (typeof session.costUsd === 'number') {
+    items.push(`<span class="activity-item" title="Total cost so far this session">💰 $${session.costUsd.toFixed(2)}</span>`);
+  }
+  if (typeof session.contextUsedPercent === 'number') {
+    const pct = Math.round(session.contextUsedPercent);
+    items.push(`
+      <span class="activity-item context-item" title="Approx. context window used (last turn's input + cache tokens / 200k)">
+        <span class="context-bar-track"><span class="context-bar-fill ${contextBand(session.contextUsedPercent)}" style="width:${Math.min(100, session.contextUsedPercent)}%"></span></span>
+        ${pct}% ctx
+      </span>
+    `);
+  }
+  if (items.length === 0) return '';
+  return `<div class="activity-line">${items.join('')}</div>`;
+}
+
 // Rate-limit numbers only ever show up when the optional statusline
 // sidecar (lib/activitySidecar.mjs) has written one for this session —
-// most installs won't have one, so this renders nothing rather than an
-// "n/a" on every single row (see the activity design doc's
-// sidecar-vs-transcript tradeoff). Account-wide, not per-session — every
-// session with a sidecar should show the same percentage, which is
-// expected, not a bug (see the design doc's note on why these aren't
-// additive across sessions).
-function rateLimitHtml(session) {
+// most installs won't have one (see activityStripHtml's placeholder for
+// that case). Account-wide, not per-session — every session with a
+// sidecar should show the same percentage, which is expected, not a bug
+// (see the design doc's note on why these aren't additive across sessions).
+function rateLimitLineHtml(session) {
   const rl = session.rateLimits;
   const items = [];
   if (typeof rl?.five_hour?.used_percentage === 'number') items.push(`5h ${Math.round(rl.five_hour.used_percentage)}%`);
   if (typeof rl?.seven_day?.used_percentage === 'number') items.push(`7d ${Math.round(rl.seven_day.used_percentage)}%`);
   if (items.length === 0) return '';
-  return `<span class="activity-item" title="Account-wide rate limit usage, from the statusline sidecar">${items.join(' · ')}</span>`;
+  return `<div class="activity-line"><span class="activity-item" title="Account-wide rate limit usage, from the statusline sidecar">📊 ${items.join('  ·  ')}</span></div>`;
 }
 
-function activityRowHtml(session) {
-  const parts = [];
-  if (typeof session.costUsd === 'number') {
-    parts.push(`<span class="activity-item" title="Total cost so far this session">$${session.costUsd.toFixed(2)}</span>`);
+// Groups cost/context/rate-limits into one small labeled, visually boxed
+// strip (border + background, set apart from the row-sub file-metadata
+// line above it) instead of scattering bare numbers next to git
+// branch/file size. Every card gets this same box regardless of whether
+// the data exists yet — a session with no statusline sidecar (most of
+// them, right now: sidecars only exist for sessions active since this
+// user wired up their statusline) still renders the same two-line shape,
+// just with a dimmed placeholder line in place of what's missing, so
+// card heights stay consistent across the whole list rather than jagged
+// depending on which sessions happen to have data.
+function activityStripHtml(session) {
+  const costContextLine = costContextLineHtml(session);
+  const rateLine = rateLimitLineHtml(session);
+  if (!costContextLine && !rateLine) {
+    return `<div class="activity-strip is-empty muted" title="No cost/context/rate-limit data yet — appears once this session has run with the statusline sidecar or a cost checkpoint in its transcript">no recent activity data</div>`;
   }
-  if (typeof session.contextUsedPercent === 'number') {
-    const pct = Math.round(session.contextUsedPercent);
-    parts.push(`
-      <span class="activity-item context-item" title="Approx. context window used (last turn's input + cache tokens / 200k)">
-        <span class="context-bar-track"><span class="context-bar-fill ${contextBand(session.contextUsedPercent)}" style="width:${Math.min(100, session.contextUsedPercent)}%"></span></span>
-        ${pct}%
-      </span>
-    `);
-  }
-  const rateLimit = rateLimitHtml(session);
-  if (rateLimit) parts.push(rateLimit);
-  const expiry = expiryBadgeHtml(session);
-  if (expiry) parts.push(expiry);
-  if (parts.length === 0) return '';
-  return `<div class="row-activity muted">${parts.join('')}</div>`;
+  const costContextPlaceholder = `<div class="activity-line muted">no cost/context data yet</div>`;
+  const ratePlaceholder = `<div class="activity-line muted" title="Rate limits come from this user's own statusline sidecar — none written for this session yet">no rate-limit data yet</div>`;
+  return `<div class="activity-strip">${costContextLine || costContextPlaceholder}${rateLine || ratePlaceholder}</div>`;
 }
 
 function escapeHtml(str) {
@@ -325,7 +343,8 @@ function renderRow(row, session) {
         ${sizeLabel ? `<span>· ${sizeLabel}</span>` : ''}
       </div>
       ${session.preview ? `<p class="row-preview">${escapeHtml(session.preview)}</p>` : ''}
-      ${activityRowHtml(session)}
+      ${activityStripHtml(session)}
+      ${expiryBadgeHtml(session)}
       <div class="row-id muted" title="Session ID">${escapeHtml(session.sessionId)}</div>
     </div>
     <div class="row-actions">

@@ -347,13 +347,37 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   font-size: 11px;
 }
 
-.row-activity {
+/* Groups cost/context/rate-limits into their own small, visually set-apart
+   strip — a subtle border + background is what separates it from the
+   file-metadata line (.row-sub: branch/size) above, rather than everything
+   reading as one undifferentiated run of numbers. Fixed min-height covers
+   both its own two-line case and the single-line empty-state placeholder,
+   so a card with no sidecar data yet is the same height as one with full
+   data instead of the list looking jagged. */
+.activity-strip {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 42px;
+  margin: 4px 0 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.activity-strip.is-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+.activity-line {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 12px;
+  gap: 14px;
   flex-wrap: wrap;
 }
+.activity-line.muted { color: var(--muted); font-style: italic; }
 .activity-item { display: inline-flex; align-items: center; gap: 6px; }
 
 .context-bar-track {
@@ -362,6 +386,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   border-radius: 3px;
   background: var(--border);
   overflow: hidden;
+  flex-shrink: 0;
 }
 .context-bar-fill { display: block; height: 100%; border-radius: 3px; }
 .context-green { background: var(--green); }
