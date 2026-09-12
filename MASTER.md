@@ -50,6 +50,7 @@ Two themes, explicit toggle (see Theming below) — dark is the default.
 | Text, muted | `#868C95` | `#5B6570` | `--text-muted` |
 | Accent (chrome only — see below) | `#45B8CC` | `#1C8DA3` | `--accent` |
 | Accent, soft fill (sparkline area, hover tints) | `#173238` | `#DCF0F3` | `--accent-soft` |
+| Accent, as plain text (links, `.btn-attach` label) | `#45B8CC` | `#17727F` | `--accent-text` |
 | Success | `#5FBF8A` | `#2F9E68` | `--success` |
 | Warning | `#E0B04A` | `#B8860F` | `--warning` |
 | Critical | `#E0685A` | `#C23B2E` | `--critical` |
@@ -79,14 +80,24 @@ success; `waiting`/`running elsewhere unconfirmed` (both "worth a glance")
 → warning; `resumable`/`superseded`/`status unknown` (inactive, not
 unhealthy) → neutral `--text-muted`, no status color at all.
 
+**`--accent` vs `--accent-text`:** `--accent` is the validated hex, used for
+borders, focus rings, fills, and the sparkline line — contexts WCAG doesn't
+hold to the 4.5:1 text-contrast bar. `--accent-text` exists only because
+light mode's `--accent` (#1C8DA3) measures 3.43–3.90:1 as plain text —
+short of that bar. It's the same hex as `--accent` in dark mode (already
+passes) and a darkened #17727F in light mode, applied only where accent is
+literal text color (`.link-btn`, `.btn-attach`'s label).
+
 ### Typography
 
 - **Data font (numbers, IDs, paths):** IBM Plex Mono
 - **Label/body font:** IBM Plex Sans
 - **Google Fonts:** `@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');`
-- **Big stat numbers:** ~34px, IBM Plex Mono, weight 600 — the one place
-  this app goes oversized. Applied via `--font-mono` on `.stat-value`,
-  `.row-cwd`, `.row-id`.
+- **Big stat numbers:** 22px, IBM Plex Mono, weight 600 — the one place
+  this app goes oversized relative to its 13px body text, sized down from
+  an initial 34px (2026-09-12 pass: the 4 stat cards read as oversized at
+  that size) while staying clearly bigger than every other number on the
+  page. Applied via `--font-mono` on `.stat-value`, `.row-cwd`, `.row-id`.
 - Everything else (row names, filter labels, buttons, badges) is
   IBM Plex Sans via `body`'s default `--font-sans`.
 
@@ -154,11 +165,11 @@ inherited either way.
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  padding: var(--space-24);
+  padding: var(--space-16);
   transition: border-color 180ms ease-out;
 }
 .stat-card:hover { border-color: var(--accent); }
-.stat-value { font-family: var(--font-mono); font-size: 34px; font-weight: 600; }
+.stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 600; }
 ```
 
 Each card: a label, an oversized mono number, and an inline SVG sparkline
@@ -241,8 +252,9 @@ doesn't exist:
 - [ ] No emojis used as icons
 - [ ] `cursor: pointer` on all clickable elements
 - [ ] Hover states are fast (150–200ms) and don't scale/bounce
-- [ ] Light mode: text contrast ≥ 4.5:1 (verified against the exact tokens
-      above — see the design-audit findings for computed ratios)
+- [x] Light mode: text contrast ≥ 4.5:1 (verified against the exact tokens
+      above — see `--accent-text` for the one token that needed to differ
+      from its non-text counterpart to clear this)
 - [ ] Focus states visible for keyboard navigation
 - [ ] `prefers-reduced-motion` respected (status pulses, row enter/leave,
       spinners, shake, count-pop all disabled)
