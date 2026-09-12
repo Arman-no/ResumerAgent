@@ -8,8 +8,15 @@ instead of asking the user what to do first.
 ## What this is
 
 A local Windows dashboard that finds and resumes dead/live Claude Code CLI
-sessions. Branch `master` is feature-complete — do not work from any other
-branch unless the user tells you to.
+sessions — plus a per-session expiry warning and an activity/observability
+panel (cost, context-window %, optional rate limits) and a dark/light
+themed UI. Branch `master` is feature-complete — do not work from any
+other branch unless the user tells you to. Don't re-derive any of that
+from first principles: `docs/*-design.md` has the design history and final
+shipped state per feature, and `MASTER.md` at the repo root is the design
+system (colors, type, spacing) — read those instead of guessing, and
+**if you're touching `public/styles.css` or any UI, read `MASTER.md`
+first.**
 
 ## Prerequisites — check before you install
 
@@ -82,8 +89,9 @@ runs the identical underlying script. Two independent reasons, both real:
 | `EADDRINUSE` / "already running" message on `npm start` | Something's already bound to port 4317 — could be a genuinely-still-running previous instance | Use `npm run launch` instead (kills the old one first), or set a different `PORT` in `.env` if the user wants both running. |
 | Resume/Attach opens a `cmd.exe` window but it errors with "The filename, directory name, or volume label syntax is incorrect" | A `RESUME_COMMAND`/`ATTACH_COMMAND` override in `.env` has quoting that doesn't survive nested `cmd.exe` parsing | Don't hand-edit the spawn logic to patch around it. Check `.env` for a custom command template first — the shipped defaults (`lib/config.mjs`) are already the fixed version; a leftover custom override from an older `.env` is the usual cause. |
 | Resumed session's terminal shows the wrong session name entirely, or an unrelated Claude session's name changes | Environment-variable identity leak into the spawned process, OR (rarer, see hard rule below) process-ancestry contamination | Confirm `lib/cleanEnv.mjs` is being used by every `spawn`/`exec` call in `server.mjs` and `lib/liveAgents.mjs` — it should already be wired in on `master`. If you changed something and this regressed, that's the file to check first. If it's not an env issue, see the hard rule below before doing anything else. |
-| Dashboard loads, lists sessions, but every row is stuck "Status unknown" with every button disabled | `readLiveAgents()` (`lib/liveAgents.mjs`) failed — check the server's own console output, not the browser. It now logs whether `claude` is missing from PATH vs. some other failure (wrong CLI version too old to support `agents --json --all`, a timeout, EDR/AppLocker blocking the `claude` process itself). | Run `claude --version` and `claude agents --json --all` directly in the same shell the server runs in — whatever that fails with is the real cause; fix that, don't touch the merge/safety logic. |
+| Dashboard loads, lists sessions, but every row is stuck "Status unknown" with every button disabled | `readLiveAgents()` (`lib/liveAgents.mjs`) failed — check the server's own console output, not the browser. It now logs whether `claude` is missing from PATH vs. some other failure (wrong CLI version too old to support `agents --json --all`, a timeout, EDR/AppLocker blocking the `claude` process itself). `claude agents --json --all` cost scales with tracked-session count (measured 2.2–6.3s with ~8–11 sessions on a real machine), which is why its timeout is already 15s, not 5s — don't "fix" a timeout by raising it further without checking whether something else is actually hanging. | Run `claude --version` and `claude agents --json --all` directly in the same shell the server runs in — whatever that fails with is the real cause; fix that, don't touch the merge/safety logic. |
 | Resume opens nothing, but the dashboard still says it succeeded | Older code returned `ok:true` before confirming the spawn actually started, so a blocked `cmd.exe`/`start` (AppLocker/EDR on this user) looked like success. `master` now waits briefly for the spawn's own error event before responding. | If you still see this, check the server console for "Failed to spawn resume terminal" — that's the real error the UI should now also be surfacing. |
+| A session row's activity strip never shows rate-limit numbers (5h/7d), even though cost/context data appears fine | Not a bug. Rate limits have no transcript representation at all — they come exclusively from an optional statusline-sidecar file (`lib/activitySidecar.mjs`, `<SESSIONS_ROOT>/activity/<sessionId>.json`), written by the user's own statusline script. Most installs don't have one configured. | Confirm with the user whether they have a statusline sidecar writer set up. If not, this is expected — don't add a transcript-parsing workaround for rate limits, `docs/2026-09-12-activity-observability-design.md` already confirmed there's no such data to parse. |
 
 ## Hard rules — do not violate these even if it seems like it would help
 
