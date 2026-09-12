@@ -1,37 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
 :root {
   color-scheme: dark;
-  --bg: #0f1115;
-  --surface: #171a21;
-  --border: #262b36;
-  --text: #e7e9ee;
-  --muted: #8b93a3;
-  --accent: #7c6ce8;
-  --green: #4caf7d;
-  --blue: #5b8def;
-  --amber: #e0a740;
-  --gray: #5b6270;
-  --danger: #e05d5d;
-  --radius: 10px;
-  /* A light tint over the row background on hover — needs a different sign
-     per theme (lighten on dark, darken on light) since "add a bit of white"
-     is invisible once the background is already near-white. */
-  --hover-tint: rgba(255, 255, 255, 0.03);
+  --bg: #0E1013;
+  --surface: #16191D;
+  --surface-2: #1E2227;
+  --border: #292E34;
+  --text: #E7E9EC;
+  --text-muted: #868C95;
+  --accent: #45B8CC;
+  --accent-soft: #173238;
+  --success: #5FBF8A;
+  --warning: #E0B04A;
+  --critical: #E0685A;
+  --shadow-lg: 0 8px 24px rgba(0,0,0,.45);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+  /* Alpha-blended tints (pill/badge backgrounds, icon-btn-danger border,
+     etc.) need the token's color as raw r,g,b, not a hex string — CSS can't
+     add alpha to a hex custom property directly. Keeping these next to the
+     hex tokens they're derived from is what "no rogue hex values outside
+     the token file" actually means in practice: a tinted background is
+     still sourced from this file, never a hand-picked rgba() a fix-up pass
+     wouldn't catch. */
+  --accent-rgb: 69, 184, 204;
+  --success-rgb: 95, 191, 138;
+  --warning-rgb: 224, 176, 74;
+  --critical-rgb: 224, 104, 90;
+  --text-muted-rgb: 134, 140, 149;
+  --radius-lg: 16px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+  --space-4: 4px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  --font-sans: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  /* Real computed contrast (design-audit pass): white text on --accent is
+     only 2.34:1 in dark mode and 3.90:1 in light mode — both fail WCAG
+     AA's 4.5:1 for normal-size text. This isn't a new color: it's this
+     theme's own darkest already-approved token (dark: the --bg value,
+     light: the --text value) reused as the foreground for text that sits
+     on a solid accent/success/warning/critical fill, where it measures
+     8.15:1 (dark, on accent) and 4.44:1 (light, on accent) — the light
+     figure is the best achievable pairing with this validated accent hex
+     without introducing an unapproved color; see MASTER.md's audit notes
+     for the residual near-miss this doesn't fully close. */
+  --on-accent: #0E1013;
 }
 
 [data-theme="light"] {
   color-scheme: light;
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --border: #e2e5ea;
-  --text: #14161a;
-  --muted: #5b6270;
-  --accent: #6d5ce8;
-  --green: #2f9e64;
-  --blue: #3f72d1;
-  --amber: #b8791f;
-  --gray: #6b7280;
-  --danger: #d64545;
-  --hover-tint: rgba(0, 0, 0, 0.035);
+  --bg: #EDF1F3;
+  --surface: #FFFFFF;
+  --surface-2: #F5F7F8;
+  --border: #DDE3E7;
+  --text: #171B1F;
+  --text-muted: #5B6570;
+  --accent: #1C8DA3;
+  --accent-soft: #DCF0F3;
+  --success: #2F9E68;
+  --warning: #B8860F;
+  --critical: #C23B2E;
+  --shadow-lg: 0 8px 24px rgba(20,30,35,.10);
+  --shadow-sm: 0 1px 2px rgba(20,30,35,.06);
+  --accent-rgb: 28, 141, 163;
+  --success-rgb: 47, 158, 104;
+  --warning-rgb: 184, 134, 15;
+  --critical-rgb: 194, 59, 46;
+  --text-muted-rgb: 91, 101, 112;
+  --on-accent: #171B1F;
 }
 
 * { box-sizing: border-box; }
@@ -40,7 +81,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, "Segoe UI", Inter, sans-serif;
+  font-family: var(--font-sans);
 }
 
 .topbar {
@@ -54,7 +95,7 @@ body {
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 600; }
 .topbar-brand { display: flex; align-items: center; gap: 10px; }
 .topbar-actions { display: flex; align-items: center; gap: 12px; }
-.muted { color: var(--muted); font-size: 13px; }
+.muted { color: var(--text-muted); font-size: 13px; }
 
 /* A small proof-of-life: pulses on its own, and rings out on every
    successful poll (see app.js pulseHeartbeat) — a genuinely "live"
@@ -64,7 +105,7 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--success);
   flex-shrink: 0;
 }
 .heartbeat::before {
@@ -72,7 +113,7 @@ body {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: var(--green);
+  background: var(--success);
   animation: heartbeat-idle 2.4s ease-in-out infinite;
 }
 .heartbeat::after {
@@ -80,7 +121,7 @@ body {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1px solid var(--green);
+  border: 1px solid var(--success);
   opacity: 0;
 }
 .heartbeat.ping::after {
@@ -99,7 +140,7 @@ body {
   background: none;
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   width: 32px;
   height: 32px;
   cursor: pointer;
@@ -114,19 +155,18 @@ body {
 .icon-btn:disabled { opacity: 0.6; cursor: default; }
 .icon-btn svg { display: block; }
 
-.refresh-icon { transition: transform 400ms ease-out; }
 .refresh-icon.spinning { animation: spin 700ms linear infinite; }
 
 .icon-btn-danger {
-  color: var(--danger);
-  border-color: rgba(224, 93, 93, 0.35);
+  color: var(--critical);
+  border-color: rgba(var(--critical-rgb), 0.35);
   transition: transform 150ms ease-out, background 150ms ease-out, color 150ms ease-out;
 }
-.icon-btn-danger:hover { background: rgba(224, 93, 93, 0.12); }
+.icon-btn-danger:hover { background: rgba(var(--critical-rgb), 0.12); }
 .icon-btn-danger.armed {
-  background: var(--danger);
+  background: var(--critical);
   color: white;
-  border-color: var(--danger);
+  border-color: var(--critical);
 }
 
 /* Layout: filter sidebar + session list, side by side */
@@ -158,7 +198,7 @@ body {
 .filter-label {
   font-size: 11px;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 0;
@@ -168,7 +208,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 13px;
   width: 100%;
@@ -179,22 +219,17 @@ body {
 .chip {
   background: var(--surface);
   border: 1px solid var(--border);
-  color: var(--muted);
+  color: var(--text-muted);
   border-radius: 999px;
   padding: 5px 12px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out;
+  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
 }
-.chip:hover { border-color: var(--accent); transform: translateY(-1px); }
+.chip:hover { border-color: var(--accent); }
 .chip:active { transform: scale(0.96); }
 .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.chip.active { background: var(--accent); color: white; border-color: var(--accent); animation: chip-pop 200ms ease-out; }
-@keyframes chip-pop {
-  0% { transform: scale(0.9); }
-  60% { transform: scale(1.06); }
-  100% { transform: scale(1); }
-}
+.chip.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 
 .filter-check {
   display: flex;
@@ -226,6 +261,55 @@ body {
 
 main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 
+/* Four headline stat cards, sitting above the session list — the one place
+   in this dashboard that gets the "bold" treatment (radius-lg, elevated
+   shadow, oversized mono numerals). Everything below them (session rows)
+   is deliberately flatter and quieter, per the validated visual thesis:
+   boldness spent once here, not on every repeated row. */
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-16);
+  margin-bottom: var(--space-24);
+}
+@media (max-width: 900px) {
+  .stat-cards { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 520px) {
+  .stat-cards { grid-template-columns: 1fr; }
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-24);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  transition: border-color 180ms ease-out;
+}
+.stat-card:hover { border-color: var(--accent); }
+
+.stat-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text);
+}
+.stat-sparkline { display: block; margin-top: var(--space-4); }
+.sparkline-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.sparkline-area { fill: var(--accent-soft); stroke: none; }
+
 .list-toolbar {
   display: flex;
   align-items: center;
@@ -235,11 +319,15 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   min-height: 18px;
 }
 
-#result-count.pop { animation: count-pop 250ms ease-out; }
+/* Fast, quiet cue that the count actually changed — opacity only, no
+   scale/bounce (validated interaction thesis). The class is left on the
+   element afterward (see app.js updateResultCount); that's harmless here
+   since the animation's end state already equals the element's normal
+   resting state. */
+#result-count.pop { animation: count-pop 150ms ease-out; }
 @keyframes count-pop {
-  0% { transform: scale(1); opacity: 0.6; }
-  40% { transform: scale(1.08); opacity: 1; }
-  100% { transform: scale(1); }
+  from { opacity: 0.4; }
+  to { opacity: 1; }
 }
 
 .sort-control { display: flex; align-items: center; gap: 6px; }
@@ -247,42 +335,32 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   background: var(--surface);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 4px 8px;
   font-size: 12px;
 }
 .sort-control select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.session-list { display: flex; flex-direction: column; }
+.session-list { display: flex; flex-direction: column; gap: var(--space-8); }
 
+/* Dense, quiet cards — flat, radius-sm, no shadow. Deliberately not the
+   elevated/rounded treatment the stat cards above get: the boldness is
+   spent once, up there, not repeated down an entire scrolling list. Hover
+   only ever raises the border to the accent color (validated interaction
+   thesis) — no background tint, no translate, no scaling. */
 .session-row {
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  padding: 14px 6px 14px 14px;
-  border-bottom: 1px solid var(--border);
+  gap: var(--space-12);
+  padding: var(--space-12) var(--space-8) var(--space-12) var(--space-12);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   animation: row-enter 200ms ease-out both;
-  transition: background 150ms ease-out, opacity 150ms ease-out, transform 150ms ease-out;
+  transition: border-color 150ms ease-out, opacity 150ms ease-out;
 }
-.session-row::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-  transform: scaleY(0);
-  transition: transform 150ms ease-out;
-}
-.session-row:hover {
-  background: var(--hover-tint);
-  transform: translateX(2px);
-}
-.session-row:hover::before { transform: scaleY(1); }
-.session-row:last-child { border-bottom: none; }
+.session-row:hover { border-color: var(--accent); }
 
 /* A session retired in favor of a newer, same-named one — visually
    de-emphasized so it reads at a glance as "old", separate from the
@@ -327,7 +405,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 }
 .row-sub .badge { flex-shrink: 0; }
 .row-cwd {
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -343,17 +421,18 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 }
 
 .row-id {
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
 /* Groups cost/context/rate-limits into their own small, visually set-apart
-   strip — a subtle border + background is what separates it from the
-   file-metadata line (.row-sub: branch/size) above, rather than everything
-   reading as one undifferentiated run of numbers. Fixed min-height covers
-   both its own two-line case and the single-line empty-state placeholder,
-   so a card with no sidecar data yet is the same height as one with full
-   data instead of the list looking jagged.
+   strip — surface-2 (one step up from the row's own surface background) is
+   what separates it from the file-metadata line (.row-sub: branch/size)
+   above, rather than everything reading as one undifferentiated run of
+   numbers. Fixed min-height covers both its own two-line case and the
+   single-line empty-state placeholder, so a card with no sidecar data yet
+   is the same height as one with full data instead of the list looking
+   jagged.
    min-height measured against the real two-line render (49.3px, both lines
    present + the 4px gap + 12px vertical padding), not assumed — the prior
    42px only matched the shorter one-line placeholder case and let a
@@ -368,12 +447,12 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   margin: 4px 0 2px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   font-size: 12px;
 }
 .activity-strip.is-empty {
-  color: var(--muted);
+  color: var(--text-muted);
   font-style: italic;
 }
 .activity-line {
@@ -382,9 +461,9 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   gap: 14px;
   flex-wrap: wrap;
 }
-.activity-line.muted { color: var(--muted); font-style: italic; }
+.activity-line.muted { color: var(--text-muted); font-style: italic; }
 .activity-item { display: inline-flex; align-items: center; gap: 6px; }
-.activity-freshness { color: var(--muted); }
+.activity-freshness { color: var(--text-muted); }
 
 .context-bar-track {
   width: 44px;
@@ -395,29 +474,43 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   flex-shrink: 0;
 }
 .context-bar-fill { display: block; height: 100%; border-radius: 3px; }
-.context-green { background: var(--green); }
-.context-yellow { background: var(--amber); }
-.context-red { background: var(--danger); }
+.context-green { background: var(--success); }
+.context-yellow { background: var(--warning); }
+.context-red { background: var(--critical); }
 
-/* Text-color counterparts of the same green/yellow/red bands above, for
-   the rate-limit percentages — same thresholds (usageBand() in app.js),
-   just `color` instead of `background` since there's no bar to fill here.
-   Design-review finding: these numbers previously carried no color coding
-   at all, the one place in the strip that didn't apply the threshold
-   convention the context bar already established. */
-.rate-value.rate-green { color: var(--green); }
-.rate-value.rate-yellow { color: var(--amber); }
-.rate-value.rate-red { color: var(--danger); }
+/* Same success/warning/critical bands as the context bar above, for the
+   rate-limit percentages (same thresholds — usageBand() in app.js). Status
+   color is carried by a small dot, not the number's own text color: design-
+   audit found light-theme success/warning against this strip's surface-2
+   background measure 3.0-3.2:1, short of WCAG's 4.5:1 — the same fix
+   applied to the status pills above. Critical (4.94-4.79:1) would have
+   passed on its own, but a consistent rule beats a conditional one here. */
+.rate-value {
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.rate-value::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rate-value.rate-green::before { background: var(--success); }
+.rate-value.rate-yellow::before { background: var(--warning); }
+.rate-value.rate-red::before { background: var(--critical); }
 
 .expiry-badge {
-  color: var(--amber);
-  background: rgba(224, 167, 64, 0.12);
+  color: var(--warning);
+  background: rgba(var(--warning-rgb), 0.12);
   border-radius: 999px;
   padding: 2px 9px;
   font-weight: 600;
   white-space: nowrap;
 }
-.expiry-urgent { color: var(--danger); background: rgba(224, 93, 93, 0.14); }
+.expiry-urgent { color: var(--critical); background: rgba(var(--critical-rgb), 0.14); }
 
 .row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .row-actions .btn { width: auto; padding: 7px 14px; }
@@ -436,19 +529,36 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: currentColor;
+  flex-shrink: 0;
 }
-.status-idle { color: var(--green); background: rgba(76, 175, 125, 0.12); }
-.status-busy { color: var(--blue); background: rgba(91, 141, 239, 0.12); }
-.status-waiting { color: var(--amber); background: rgba(224, 167, 64, 0.12); }
-.status-resumable { color: var(--gray); background: rgba(91, 98, 112, 0.15); }
-.status-superseded { color: var(--gray); background: rgba(91, 98, 112, 0.15); font-style: italic; }
+/* idle/busy are both "live and functioning normally" — same success color,
+   distinguished only by label text, not a fourth status hue. waiting/
+   external both mean "needs a look" — warning. resumable/superseded are
+   inactive, not unhealthy — neutral text-muted, no success/warning/
+   critical color at all.
+   Text itself stays --text (not the status color): design-audit found the
+   light theme's success/warning against a near-white pill background measure
+   3.2-3.4:1, short of WCAG's 4.5:1 for text. The status color still reads —
+   via the dot below and the tinted background — without depending on
+   text-color contrast that a light background can't reliably deliver.
+   resumable/superseded are the exception: text-muted already clears 4.5:1
+   in both themes (5.2-5.9:1), and dimmer text is the intended signal for
+   "inactive," not a color that needs a dot to carry it. */
+.status-idle, .status-busy { color: var(--text); background: rgba(var(--success-rgb), 0.12); }
+.status-idle::before, .status-busy::before { background: var(--success); }
+.status-waiting { color: var(--text); background: rgba(var(--warning-rgb), 0.12); }
+.status-waiting::before { background: var(--warning); }
+.status-resumable { color: var(--text-muted); background: rgba(var(--text-muted-rgb), 0.15); }
+.status-resumable::before { background: currentColor; }
+.status-superseded { color: var(--text-muted); background: rgba(var(--text-muted-rgb), 0.15); font-style: italic; }
+.status-superseded::before { background: currentColor; }
 /* A session we've independently confirmed is still running (its registry
    pid checks out against the OS process table) even though claude agents
    never reported it — genuinely different information than "we have no
    idea," so it gets its own color/motion, not the same flat gray as plain
    "status unknown." */
-.status-external { color: var(--amber); background: rgba(224, 167, 64, 0.12); }
+.status-external { color: var(--text); background: rgba(var(--warning-rgb), 0.12); }
+.status-external::before { background: var(--warning); }
 
 .status-idle::before, .status-busy::before, .status-waiting::before, .status-external::before {
   animation: pulse 2s ease-in-out infinite;
@@ -480,23 +590,22 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   .status-idle::before, .status-busy::before, .status-waiting::before, .status-external::before { animation: none; }
-  .session-row { animation: none; transition: none; }
-  .session-row:hover { transform: none; }
-  .shake, .btn-icon-spinner, .refresh-icon.spinning, .chip.active, #result-count.pop { animation: none; }
+  .session-row, .stat-card { animation: none; transition: none; }
+  .shake, .btn-icon-spinner, .refresh-icon.spinning, #result-count.pop { animation: none; }
   .heartbeat::before, .heartbeat.ping::after { animation: none; }
 }
 
 .badge {
   background: var(--border);
-  color: var(--muted);
-  border-radius: 6px;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
   padding: 2px 8px;
 }
 
 .btn {
   width: 100%;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
   font-size: 13px;
   cursor: pointer;
@@ -506,9 +615,9 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn:disabled { opacity: 0.6; cursor: default; }
 
-.btn-primary { background: var(--accent); color: white; }
-.btn-secondary { background: var(--border); color: var(--muted); }
-.btn-flash-success { background: var(--green) !important; transition: background 200ms ease-out; }
+.btn-primary { background: var(--accent); color: var(--on-accent); }
+.btn-secondary { background: var(--border); color: var(--text-muted); }
+.btn-flash-success { background: var(--success) !important; transition: background 200ms ease-out; }
 /* Deliberately not filled like .btn-primary — Attach joins an
    already-running session rather than starting a new one, and a solid CTA
    button reads as "launch something", which is exactly the wrong signal
@@ -517,16 +626,16 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   background: transparent;
   color: var(--accent);
   border: 1px solid var(--accent);
-  transition: background 150ms ease-out, transform 150ms ease-out, opacity 150ms ease-out;
+  transition: background 150ms ease-out, opacity 150ms ease-out;
 }
-.btn-attach:hover { background: rgba(124, 108, 232, 0.12); }
+.btn-attach:hover { background: rgba(var(--accent-rgb), 0.12); }
 
 .session-row.skeleton {
   min-height: 60px;
   background: linear-gradient(90deg, var(--surface) 25%, var(--border) 37%, var(--surface) 63%);
   background-size: 400% 100%;
   animation: skeleton-loading 1.4s ease infinite;
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
 }
 @keyframes skeleton-loading {
   0% { background-position: 100% 50%; }
@@ -535,15 +644,15 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 
 .empty, .error-banner {
   text-align: center;
-  color: var(--muted);
+  color: var(--text-muted);
   padding: 60px 0;
 }
 .error-banner button {
   margin-left: 12px;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 14px;
   cursor: pointer;
 }
@@ -556,15 +665,19 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   justify-content: center;
   gap: 14px;
   background: var(--accent);
-  color: white;
+  color: var(--on-accent);
   font-size: 13px;
   padding: 10px 16px;
 }
+/* A white-on-accent pill (the original design) measures 2.34:1 / 3.90:1 —
+   swapping which side is dark fixes it outright rather than settling for a
+   near-miss: --on-accent (this theme's darkest approved token) as the fill,
+   white as the text, comfortably clears 4.5:1 in both themes. */
 .update-banner button {
-  background: white;
-  color: var(--accent);
+  background: var(--on-accent);
+  color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 4px 12px;
   font-size: 13px;
   font-weight: 600;
@@ -577,10 +690,10 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   left: 50%;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 10px 16px;
   font-size: 13px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-lg);
   opacity: 0;
   transform: translate(-50%, 8px);
   transition: opacity 200ms ease-out, transform 200ms ease-out;
