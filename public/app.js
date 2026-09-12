@@ -1,5 +1,6 @@
 const POLL_INTERVAL_MS = 5 * 60 * 1000;
 
+const statCardsEl = document.getElementById('stat-cards');
 const sessionListEl = document.getElementById('session-list');
 const emptyEl = document.getElementById('empty');
 const noMatchesEl = document.getElementById('no-matches');
@@ -262,6 +263,84 @@ function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
+}
+
+// Inline SVG sparkline: an accent-colored line plus a faint accent-soft
+// area fill (validated visual thesis — accent is spent on chrome including
+// "sparkline line color", never on status). A single-value series (the
+// honest case for a stat this app has no real history for — see
+// lib/statsSummary.mjs) draws as a flat horizontal line rather than a
+// single dot, so "no trend data yet" still reads as a sparkline shape,
+// not a rendering glitch.
+function sparklineSvg(values) {
+  const width = 72;
+  const height = 24;
+  const pad = 2;
+  const series = values && values.length ? values : [0];
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = max - min || 1;
+  const points = series.length > 1
+    ? series.map((v, i) => [
+        pad + (i * (width - pad * 2)) / (series.length - 1),
+        height - pad - ((v - min) / range) * (height - pad * 2),
+      ])
+    : [[pad, height / 2], [width - pad, height / 2]];
+  const lineStr = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const areaStr = `${pad},${height - pad} ${lineStr} ${width - pad},${height - pad}`;
+  return `
+    <svg class="stat-sparkline" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" aria-hidden="true" focusable="false">
+      <polyline class="sparkline-area" points="${areaStr}"></polyline>
+      <polyline class="sparkline-line" points="${lineStr}"></polyline>
+    </svg>
+  `;
+}
+
+function statCardHtml({ label, value, sparkline, title }) {
+  return `
+    <div class="stat-card" title="${escapeHtml(title)}">
+      <span class="stat-label">${escapeHtml(label)}</span>
+      <span class="stat-value">${escapeHtml(value)}</span>
+      ${sparkline}
+    </div>
+  `;
+}
+
+// Sessions tracked / live now are exact counts straight off the sessions
+// array the server just returned. Total cost / avg context are only ever
+// "—" when not a single session has that data yet (no sidecar, no
+// cost-state line seen) — same "no data yet" convention the activity strip
+// already uses per-row, rather than rendering a misleading $0.00.
+function renderStats(stats) {
+  if (!stats) return;
+  const costLabel = stats.totalCostUsd == null ? '—' : `$${stats.totalCostUsd.toFixed(2)}`;
+  const contextLabel = stats.avgContextUsedPercent == null ? '—' : `${Math.round(stats.avgContextUsedPercent)}%`;
+  statCardsEl.innerHTML = [
+    statCardHtml({
+      label: 'Sessions tracked',
+      value: String(stats.sessionsTracked),
+      sparkline: sparklineSvg(stats.sparklines.sessionsTracked),
+      title: 'Every session this dashboard currently sees, live or dead — daily new-session count, last 14 days',
+    }),
+    statCardHtml({
+      label: 'Live now',
+      value: String(stats.liveNow),
+      sparkline: sparklineSvg(stats.sparklines.liveNow),
+      title: 'Currently live sessions (claude agents-confirmed)',
+    }),
+    statCardHtml({
+      label: 'Total cost',
+      value: costLabel,
+      sparkline: sparklineSvg(stats.sparklines.totalCostUsd),
+      title: 'Sum of cost across every session with cost data',
+    }),
+    statCardHtml({
+      label: 'Avg context used',
+      value: contextLabel,
+      sparkline: sparklineSvg(stats.sparklines.avgContextUsedPercent),
+      title: 'Average context-window usage across sessions with context data',
+    }),
+  ].join('');
 }
 
 function matchesWhen(session, when) {
@@ -657,6 +736,7 @@ async function loadSessions() {
       showUpdateBanner();
     }
     rawSessions = payload.sessions;
+    renderStats(payload.stats);
     errorEl.classList.add('hidden');
     refreshView();
     // Store the actual fetch time — computing relativeTime(Date.now())

@@ -15,6 +15,7 @@ import { purgeSessionFiles } from './lib/purgeSession.mjs';
 import { envWithoutIdentity } from './lib/cleanEnv.mjs';
 import { computeDaysUntilExpiry } from './lib/expiry.mjs';
 import { readActivitySidecar } from './lib/activitySidecar.mjs';
+import { computeStatsSummary } from './lib/statsSummary.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -364,8 +365,13 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/api/sessions' && req.method === 'GET') {
     try {
       const sessions = await getSessionsPayload();
+      // Computed over every session this dashboard currently sees, not the
+      // client's filtered/sorted view — the stat cards are meant to answer
+      // "what's true across everything," independent of whatever the
+      // sidebar filters happen to be narrowed to right now.
+      const stats = computeStatsSummary(sessions);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions }));
+      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions, stats }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(err) }));
