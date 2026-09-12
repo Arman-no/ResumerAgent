@@ -1,7 +1,15 @@
 # Session Expiry Warning — Design
 
 Date: 2026-09-12
-Status: requested, not yet implemented — pointer doc for whoever picks this up
+Status: implemented (2026-09-12) — built as designed, no deviations.
+`lib/config.mjs` reads `cleanupPeriodDays` from `<sessionsRoot>/settings.json`;
+`lib/expiry.mjs` has the pure day-count math (tested in `lib/expiry.test.mjs`);
+`server.mjs` threads `daysUntilExpiry` onto each session in `getSessionsPayload()`
+and reconciles `DISCOVERY_WINDOW_MS` against `cleanupPeriodDays` per point 3
+below; `public/app.js`/`styles.css` add the `⚠ expires in Nd` badge, shown only
+at <=5 days (no badge otherwise — "no visual noise" taken literally). The
+optional "touch" action (point 4) was not built — left as a real stretch goal,
+not silently dropped.
 Repo: `ResumerAgent`
 
 ## Problem

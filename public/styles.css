@@ -347,6 +347,37 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   font-size: 11px;
 }
 
+.row-activity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.activity-item { display: inline-flex; align-items: center; gap: 6px; }
+
+.context-bar-track {
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.context-bar-fill { display: block; height: 100%; border-radius: 3px; }
+.context-green { background: var(--green); }
+.context-yellow { background: var(--amber); }
+.context-red { background: var(--danger); }
+
+.expiry-badge {
+  color: var(--amber);
+  background: rgba(224, 167, 64, 0.12);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.expiry-urgent { color: var(--danger); background: rgba(224, 93, 93, 0.14); }
+
 .row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .row-actions .btn { width: auto; padding: 7px 14px; }
 

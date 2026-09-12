@@ -13,6 +13,8 @@ import { mergeSessions } from './lib/mergeSessions.mjs';
 import { buildResumeCommand } from './lib/resumeCommand.mjs';
 import { purgeSessionFiles } from './lib/purgeSession.mjs';
 import { envWithoutIdentity } from './lib/cleanEnv.mjs';
+import { computeDaysUntilExpiry } from './lib/expiry.mjs';
+import { readActivitySidecar } from './lib/activitySidecar.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -24,7 +26,7 @@ const CONTENT_TYPES = {
 };
 
 const MAX_BODY_BYTES = 10 * 1024;
-const DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Identifies this specific server process to the client. A browser tab left
 // open across a code change keeps running its already-loaded app.js forever
@@ -37,6 +39,15 @@ const SERVER_STARTED_AT = Date.now();
 const config = loadConfig();
 const ALLOWED_HOSTS = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
 
+// A session shouldn't silently drop out of the dashboard (discovery window)
+// before Claude Code's own cleanup would actually delete it (cleanupPeriodDays)
+// — otherwise its expiry warning would never get a chance to fire. 0 means
+// cleanup is disabled; the 7-day default stands in that case since there's
+// no real ceiling to reconcile against.
+const DISCOVERY_WINDOW_MS = config.cleanupPeriodDays
+  ? Math.max(DEFAULT_DISCOVERY_WINDOW_MS, config.cleanupPeriodDays * 24 * 60 * 60 * 1000)
+  : DEFAULT_DISCOVERY_WINDOW_MS;
+
 async function getSessionsPayload() {
   const [transcriptEntries, registryEntries, liveEntries] = await Promise.all([
     Promise.resolve(discoverSessions(config.sessionsRoot, DISCOVERY_WINDOW_MS)),
@@ -44,7 +55,7 @@ async function getSessionsPayload() {
     readLiveAgents(),
   ]);
 
-  return mergeSessions(
+  const sessions = mergeSessions(
     transcriptEntries,
     registryEntries,
     liveEntries,
@@ -56,6 +67,29 @@ async function getSessionsPayload() {
       ? readTranscriptPreviewFromFile(entry.filePath)
       : readTranscriptPreview(config.sessionsRoot, entry.cwd, entry.sessionId)
   );
+
+  // Both derived purely from data mergeSessions() already put on each
+  // session (updatedAt, sessionId) plus this server's own resolved config —
+  // kept out of mergeSessions.mjs itself so that module stays unaware of
+  // cleanupPeriodDays/sidecar concerns it has no other reason to know about.
+  return sessions.map((session) => {
+    // The sidecar (lib/activitySidecar.mjs) is Claude Code's own
+    // statusline-computed number, written fresh on every refresh — prefer
+    // it over the transcript-tail approximation whenever it's present,
+    // including for a live session that hasn't hit a cost-state
+    // checkpoint in its transcript yet (transcript parsing alone can't see
+    // that far ahead; the sidecar already has it). Falls back to the
+    // transcript-derived value for anyone without a statusline sidecar
+    // configured at all, which is the common case for most installs.
+    const sidecar = readActivitySidecar(config.sessionsRoot, session.sessionId);
+    return {
+      ...session,
+      daysUntilExpiry: computeDaysUntilExpiry(session.updatedAt, config.cleanupPeriodDays),
+      costUsd: sidecar?.cost?.total_cost_usd ?? session.costUsd,
+      contextUsedPercent: sidecar?.context_window?.used_percentage ?? session.contextUsedPercent,
+      rateLimits: sidecar?.rate_limits ?? null,
+    };
+  });
 }
 
 // Binding to 127.0.0.1 only blocks requests from OUTSIDE the machine — it
