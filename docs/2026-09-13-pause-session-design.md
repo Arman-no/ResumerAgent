@@ -5,7 +5,10 @@ Status: implemented (2026-09-13) — Pause built as designed, one bug fixed alon
 the way (see below). Extended same day with Close, an addendum at the end of
 this doc, after real memory pressure on the dev machine (15.7GB total, ~725MB
 truly available) made "no way to reclaim RAM from an interactive session"
-worth actually solving instead of leaving as an explicit non-goal.
+worth actually solving instead of leaving as an explicit non-goal. Close's
+terminal-mode reset needed three fix passes before it actually worked in
+production — see the fourth addendum for why the second "verified" fix
+never took effect at all.
 `lib/pauseSession.mjs` wraps `claude stop <id>` (tested in `lib/pauseSession.test.mjs`);
 `server.mjs` adds `canPause()` and `POST /api/pause`; `public/app.js`/`styles.css`
 add the Pause icon button (two-click confirm, same mechanism as Purge, factored
@@ -278,3 +281,64 @@ directly against that same real console, re-measured: `0x1F7`,
 `ENABLE_VIRTUAL_TERMINAL_INPUT` confirmed cleared. A real before/after on
 the actual bit that was causing the reported symptom, not an exit code
 standing in for a claim about behavior.
+
+## Fourth addendum (2026-09-13, same day): the third addendum's fix never actually ran in production
+
+Direct user report again, after the third addendum shipped: garbage on
+mouse/arrow movement still happened. The `0x20F -> 0x1F7` measurement in
+the third addendum was real — but it was produced by running
+`reset-terminal-modes.ps1` directly from an interactive PowerShell call.
+It never proved the thing that actually matters: whether the script
+*also* works when invoked the way production invokes it —
+`server.mjs` -> `closeInteractiveSession()` -> `execFile('powershell', [...])`.
+That gap is exactly what "the script ran without error" vs. "the reported
+symptom is gone" was already warning about, and it bit again one layer
+deeper.
+
+**Investigation, done through the real path this time.** Added temporary
+diagnostic logging to the script (every `GetConsoleMode`/`SetConsoleMode`/
+`WriteFile` call, its Win32 error code, and the handle value) and drove it
+through the actual `POST /api/close` endpoint on the running server
+against a real disposable test session — not a hand-run script, not a
+simulated call. The log showed the real failure immediately:
+`SetConsoleMode(hIn)` returned `ok=False, Win32Error=6` (`ERROR_INVALID_HANDLE`),
+and both `GetConsoleMode` reads came back `0x0`.
+
+**Root cause.** `GetStdHandle` returns the handles a process was *created*
+with, not whatever console it later attaches to via `AttachConsole`. Node's
+`execFile` redirects the spawned PowerShell's stdout/stdin to pipes so it
+can capture output for the promise — so in production,
+`GetStdHandle(STD_OUTPUT_HANDLE)`/`GetStdHandle(STD_INPUT_HANDLE)` returned
+those pipes, not the attached console's real buffers. Every escape
+sequence and mode change in *both* earlier fixes was silently written into
+a discarded pipe going nowhere; the only reason the third addendum's
+`SetConsoleMode` call ever appeared to succeed is that the hand-run test
+that "verified" it never had pipe redirection in the first place, so it
+was testing a different code path than the one users actually hit.
+
+**Fix.** Replaced `GetStdHandle` with `CreateFile("CONOUT$")` /
+`CreateFile("CONIN$")` — the documented Win32 pattern for exactly this
+situation, which always opens the *currently attached* console's real
+buffers regardless of what the calling process's own standard handles
+point to. (Turned up one more real bug while wiring this in: the
+`GENERIC_READ`/`GENERIC_WRITE` constants are `0x80000000`/`0x40000000`,
+which PowerShell tokenizes as negative `Int32` values; `[uint32]` casts a
+negative source value with a checked conversion and throws rather than
+reinterpreting the bits. Switched to the equivalent positive decimal
+literals, which promote to `Int64` and cast into `UInt32` cleanly.)
+
+**Verification, through the real path.** Rebuilt the diagnostic run
+end-to-end: spawned a disposable test session, called the real
+`POST /api/close` HTTP endpoint against it (not a direct script
+invocation), and read the log. `preInMode=0x20F` (confirmed still broken
+going in) -> `SetConsoleMode ok=True` -> `postInMode=0x1F7` (confirmed
+fixed), with `hOut`/`hIn` now real non-null console handles instead of
+`0x0` pipe reads. Removed the diagnostic logging once confirmed; the
+finding above is preserved here instead. `node --test lib/*.test.mjs`:
+27/27 still passing (only the `.ps1` script changed, no JS logic).
+
+**Lesson, sharpened once more:** verifying a fix by running the affected
+script directly is not the same claim as verifying the code path users
+actually trigger. When a fix crosses a process boundary (here:
+Node spawning PowerShell with redirected stdio), the verification has to
+cross that same boundary, or it's proving a different, easier claim.
