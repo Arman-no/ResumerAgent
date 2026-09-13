@@ -1,7 +1,11 @@
 # Pause a Live Session — Design
 
 Date: 2026-09-13
-Status: implemented (2026-09-13) — built as designed, one bug fixed along the way (see below).
+Status: implemented (2026-09-13) — Pause built as designed, one bug fixed along
+the way (see below). Extended same day with Close, an addendum at the end of
+this doc, after real memory pressure on the dev machine (15.7GB total, ~725MB
+truly available) made "no way to reclaim RAM from an interactive session"
+worth actually solving instead of leaving as an explicit non-goal.
 `lib/pauseSession.mjs` wraps `claude stop <id>` (tested in `lib/pauseSession.test.mjs`);
 `server.mjs` adds `canPause()` and `POST /api/pause`; `public/app.js`/`styles.css`
 add the Pause icon button (two-click confirm, same mechanism as Purge, factored
@@ -105,3 +109,90 @@ both assert `live: false`).
   agents` now reports a paused session as gone is real external state this
   client hasn't polled yet — `pauseSession()` in `app.js` triggers a real
   `refreshNow()` instead of guessing the new row shape.
+
+## Addendum (2026-09-13, same day): Close, for a live interactive session
+
+`lib/closeSession.mjs` (tested in `lib/closeSession.test.mjs`); `server.mjs`
+adds `canClose()` and `POST /api/close`; `public/app.js`/`styles.css` add the
+Close (✕) icon button next to a live interactive row's disabled Resume
+button, same two-click confirm as Pause/Purge via `handleConfirmClick()`.
+`lib/mergeSessions.mjs` now also exposes `pid` on every merged session
+(previously computed only for the internal `isPidAlive()` check) — Close
+needs a real OS pid to act on, the way Pause needs a background job's `id`.
+
+**Why this exists.** The Pause design above deliberately left Close out of
+scope: "there is no external stop surface for an interactive session at
+all." That's still true — nothing changed about what Claude Code exposes.
+What changed is the cost of leaving it unsolved: a real memory check on the
+dev machine mid-session found 15.7GB total RAM with only ~725MB truly
+available (`Get-Counter '\Memory\Available MBytes'`, not the more
+optimistic `Win32_OperatingSystem.FreePhysicalMemory`), with 42 live
+node/claude processes totaling 6.8GB private memory across ~5 simultaneous
+interactive sessions plus their own LSP/MCP helper processes. Pausing only
+covers background jobs, which most of this user's sessions aren't — Close
+is what actually lets the one lever that matters (ending sessions nobody's
+using right now) be pulled from the dashboard instead of hunting down and
+closing terminal windows by hand.
+
+**What was tried and rejected, in order, all verified live against a real
+disposable interactive session:**
+
+1. **`GenerateConsoleCtrlEvent` (the standard signal-based Ctrl+C).**
+   `AttachConsole` + `SetConsoleCtrlHandler` + two timed `CTRL_C_EVENT`s (to
+   match Claude Code's own "press again to confirm" exit prompt) all
+   reported success. The target process didn't budge.
+2. **`WriteConsoleInput` (a raw Ctrl+C keystroke written into the console's
+   input buffer, bypassing the signal system entirely).** Also reported
+   success on both a down and up event, sent twice. Also no effect.
+   `GetConsoleMode` on the target's console read `0x208` —
+   `ENABLE_VIRTUAL_TERMINAL_INPUT` set, `ENABLE_PROCESSED_INPUT` /
+   `ENABLE_LINE_INPUT` / `ENABLE_ECHO_INPUT` all off. Claude Code's
+   interactive UI reads through a pseudo-console/raw-input layer that
+   neither the classic signal path nor the classic input-buffer path
+   reaches. There is no verified in-band way to ask it to exit from outside
+   the process — this is a hard wall, not a tuning problem.
+3. **A direct process kill, but only the top-level pid.** Rejected once
+   traced live: an interactive session's `claude.exe` spawns its own
+   LSP/MCP helper processes (pyright, the ruflo MCP server, Playwright's
+   MCP server) as real descendants several process-levels deep through
+   intermediate `cmd.exe`/`node.exe` launcher wrappers — confirmed by
+   walking `Win32_Process.ParentProcessId` chains for real running
+   sessions on this machine. A single-pid kill leaves that entire tree
+   orphaned and still consuming memory, defeating the actual point of
+   Close. Two independent live test-and-kill runs each surfaced **4
+   separate descendant trees**, several levels deep, for a session barely
+   a few seconds old.
+
+**What Close actually does:** `taskkill /PID <pid> /T /F` — `/T` (tree)
+ends the target and every descendant, and never touches ancestors, so the
+session's own parent `cmd.exe` window is untouched. Verified live that the
+surviving window stays usable: `GetConsoleMode` on that console read back
+normal cooked-mode flags (echo, line input, processed input all restored)
+immediately after the child exited, with no manual `SetConsoleMode` fixup
+needed — Windows/cmd.exe already resets it on its own once its child
+process is gone.
+
+**Safety.** `canClose(session)` mirrors `canPause`'s guard ordering
+(`liveUnknown` → `superseded` → `live`) but inverts the kind check — the
+one case `canSafelyAct` always refuses. `closeInteractiveSession()` also
+re-verifies the target is still a real `claude.exe` process (via
+`tasklist /FI "PID eq <pid>"`) immediately before acting, guarding against
+PID reuse specifically — the server already re-derives session state fresh
+per the established pattern, but killing a silently-recycled PID has no
+safe undo, unlike every other action in this app.
+
+**A real bug this surfaced, on top of the PID-reuse guard:** `taskkill /T`
+fails its *overall* exit code if any single descendant can't be
+terminated — including one that already exited on its own between
+enumeration and the kill attempt. Confirmed live: a real helper process
+raced this way ("no running instance of the task" for one specific child),
+even though the actual target pid was already gone — the real goal had
+already been reached. Fixed by re-checking the target pid specifically
+after a `taskkill` failure and only surfacing the error if the target
+itself is still running; a descendant losing that race is not a failure.
+Covered by `lib/closeSession.test.mjs`.
+
+**What wasn't built:** no attempt at a gentler close (see the rejected
+list above — there isn't one to reach for), and no change to Pause's own
+scope — a live background job still goes through `claude stop`, never
+through Close's tree-kill, since the gentler native path exists for it.
