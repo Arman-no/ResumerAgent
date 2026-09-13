@@ -36,9 +36,13 @@ const PAUSE_ICON = `
     <rect x="14" y="5" width="4" height="14" rx="1" />
   </svg>
 `;
+// Power icon, not an X — user feedback 2026-09-13: the X (reused from
+// Purge/Delete's own icon) read as "delete", which Close never does.
+// Chosen from a 3-option artifact preview; see docs/2026-09-13-pause-session-design.md.
 const CLOSE_ICON = `
   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M6 6l12 12M18 6L6 18" />
+    <path d="M12 3v8" />
+    <path d="M18.36 6.64a9 9 0 1 1-12.73 0" />
   </svg>
 `;
 const SPINNER_ICON = `<span class="btn-icon-spinner"></span>`;
@@ -526,7 +530,7 @@ function renderRow(row, session) {
         ${label}
       </button>
       ${canPause ? `<button class="icon-btn icon-btn-pause" data-action="pause" title="${PAUSE_LABEL}" aria-label="${PAUSE_LABEL}">${PAUSE_ICON}</button>` : ''}
-      ${canClose ? `<button class="icon-btn icon-btn-danger" data-action="close" title="${CLOSE_LABEL}" aria-label="${CLOSE_LABEL}">${CLOSE_ICON}</button>` : ''}
+      ${canClose ? `<button class="icon-btn icon-btn-close" data-action="close" title="${CLOSE_LABEL}" aria-label="${CLOSE_LABEL}">${CLOSE_ICON}</button>` : ''}
       ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="${DELETE_LABEL}" aria-label="${DELETE_LABEL}">${TRASH_ICON}</button>` : ''}
     </div>
   `;

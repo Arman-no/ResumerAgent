@@ -200,6 +200,17 @@ preserved as-is; only the tokens and the hover mechanic changed.
 - `.btn-attach` — outlined `--accent`, transparent fill (Attach — joining,
   not launching, deliberately not styled as an equally-weighted CTA).
 - `.btn-secondary` — neutral `--border` fill (disabled/inert states).
+- `.icon-btn-danger` — `--critical`, filled on `.armed` (Purge).
+- `.icon-btn-pause` — `--warning` at rest and `.armed` (Pause, a live
+  background job — fully resumable via `claude stop`, but still a
+  process-stopping action, so it doesn't borrow Purge's critical red).
+- `.icon-btn-close` — `--accent` at rest (Close, a live interactive
+  session), `--warning` on hover and `.armed`. The only button whose rest
+  and interactive colors differ — deliberately: at rest it reads as a
+  normal control matching Attach's language, and only shifts to warning
+  the moment you're actually about to act on it. Chosen 2026-09-13 from a
+  3-option preview after the reused `.icon-btn-danger` (red ✕) read as
+  "delete" for an action that's fully resumable.
 - Focus: `outline: 2px solid var(--accent); outline-offset: 2px;` on every
   interactive element via `:focus-visible`.
 

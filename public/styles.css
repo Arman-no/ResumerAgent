@@ -197,6 +197,31 @@ body {
   border-color: var(--warning);
 }
 
+/* Close (interactive session): accent teal at rest, matching this app's
+   control-action language (same hue as Attach) — user feedback
+   2026-09-13 picked this over neutral gray or a "sleep" icon, then asked
+   for hover to shift to warning amber specifically, so the color itself
+   telegraphs "about to act" only on interaction, not at rest. armed reuses
+   the exact --warning/--on-accent combo already validated for
+   .icon-btn-pause.armed (~9.5:1 dark / ~5.3:1 light) — declared after
+   :hover so source order settles the tie when a still-hovered button gets
+   armed (both are 2-class-selector specificity). */
+.icon-btn-close {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.35);
+  transition: transform 150ms ease-out, background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+}
+.icon-btn-close:hover {
+  color: var(--warning);
+  border-color: rgba(var(--warning-rgb), 0.35);
+  background: rgba(var(--warning-rgb), 0.12);
+}
+.icon-btn-close.armed {
+  background: var(--warning);
+  color: var(--on-accent);
+  border-color: var(--warning);
+}
+
 /* Layout: filter sidebar + session list, side by side */
 .layout {
   display: flex;
