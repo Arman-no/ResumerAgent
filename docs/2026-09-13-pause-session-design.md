@@ -229,18 +229,52 @@ Best-effort by design — the close itself already succeeded regardless of
 this step, so a failure here (parent pid not found, `AttachConsole`
 failing) is logged and swallowed, never surfaced as a failed close.
 
-**Verification, and its honest limit.** The real script was run against a
-real live console after a real Close and exits clean (0) — confirms
-`AttachConsole`/`GetStdHandle`/`WriteFile`/`FreeConsole` all succeed
-end-to-end, not a guess. What wasn't achieved: a fully automated
-"simulate real mouse movement over the surviving window, read its console
-buffer, confirm zero garbage" loop — `GetWindowRect` on the console
-window returned a degenerate `0,0-0,0` rect in this environment (likely
-an artifact of how the disposable test session's window was spawned for
-testing, not necessarily true of a real user-opened terminal), and
-chasing that down further stopped being proportionate. The disable
-sequences themselves aren't a guess either way — they're the standard
-xterm private-mode codes, and RIS is what `reset(1)` sends on every
-VT-compatible terminal, which ConPTY is explicitly built to be. Confirm
-directly next time you use Close: hover the mouse over the surviving
-window afterward.
+**Verification, and its honest limit (as first shipped).** The real
+script was run against a real live console after a real Close and exited
+clean (0) — confirmed the Win32 calls succeed end-to-end, not a guess.
+What wasn't achieved at the time: a fully automated "simulate real mouse
+movement, read the console buffer, confirm zero garbage" loop —
+`GetWindowRect` returned a degenerate rect in the test environment, and
+chasing that down further didn't seem proportionate. **This turned out to
+matter**, see below.
+
+## Third addendum (2026-09-13, same day): the fix above was incomplete
+
+Direct user report after actually using Close in practice: typed
+characters plus Enter came through clean, but arrow keys and mouse
+movement still produced garbage. The exact gap the honest-limit note
+above flagged — output-stream verification isn't the same as confirming
+the actual symptom is gone, and it wasn't.
+
+**Root cause, this time nailed down with a real before/after measurement
+instead of trusting an exit code.** The second addendum's fix only wrote
+xterm private-mode *disable sequences* to the console's output stream.
+That's one layer. A completely separate layer — `ENABLE_VIRTUAL_TERMINAL_INPUT`
+(`0x0200`), a classic Win32 **input**-mode flag set via `SetConsoleMode`,
+not an output escape sequence — controls whether arrow keys, function
+keys, and mouse events arrive as raw VT escape bytes at all, independent
+of which specific xterm private modes are negotiated. Measured directly:
+closed a real test session with only the second addendum's fix applied,
+then read the surviving console's input mode via `GetConsoleMode` —
+`0x20F`, meaning `ENABLE_VIRTUAL_TERMINAL_INPUT` was still on. The first
+addendum's claim that "Windows resets the classic input flags on its own"
+turned out not to be reliable either — a second measurement of that same
+"auto-recovery" produced a *different* partial state each time (`0x1F7`
+once, `0x20F` another time), never guaranteed to include clearing this
+specific bit.
+
+**Fix.** `scripts/reset-terminal-modes.ps1` now also calls
+`SetConsoleMode` on the parent console's input handle directly, forcing
+it to the known-good baseline (`ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT
+| ENABLE_ECHO_INPUT | ENABLE_MOUSE_INPUT | ENABLE_INSERT_MODE |
+ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS | ENABLE_AUTO_POSITION`,
+i.e. `0x1F7`) rather than trusting Windows to get there on its own. Runs
+alongside the existing output-stream disable sequences — both are needed,
+neither substitutes for the other.
+
+**Verification, done properly this time.** Measured the exact broken
+state on a real console (`0x20F`, confirmed), ran the updated script
+directly against that same real console, re-measured: `0x1F7`,
+`ENABLE_VIRTUAL_TERMINAL_INPUT` confirmed cleared. A real before/after on
+the actual bit that was causing the reported symptom, not an exit code
+standing in for a claim about behavior.
