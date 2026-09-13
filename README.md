@@ -127,10 +127,17 @@ ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
   Claude Code's own `claude stop <id>` — not a process kill this app
   invented — so the conversation is kept exactly as `claude stop --help`
   documents: `claude attach <id>` or `claude --resume` both work again
-  once it's stopped. There is no Pause for interactive sessions — those
-  are a terminal someone has open, and Claude Code exposes no external
-  stop surface for that at all. See
-  `docs/2026-09-13-pause-session-design.md`.
+  once it's stopped. See `docs/2026-09-13-pause-session-design.md`.
+- **Close a live interactive session.** A live interactive session (a
+  terminal someone has open — the case Pause can't cover, since Claude
+  Code exposes no native stop for it) gets a Close (✕) button instead,
+  same two-click confirm. Ends the session's whole process tree (its own
+  LSP/MCP helper processes included, not just the top-level process) via
+  `taskkill /PID <pid> /T /F` — verified live that the parent terminal
+  window survives and stays usable, and the session remains resumable
+  afterward exactly like any other ended session. See the addendum in
+  `docs/2026-09-13-pause-session-design.md` for what else was tried first
+  and why it didn't work.
 
 ## Activity panel
 
@@ -185,10 +192,10 @@ Short version: it reads Claude Code's own per-session registry files plus
   for every action, both client-side (button disabled, no click handler)
   and server-side (`canSafelyAct()` in `server.mjs`) — independently, so
   a bug in one layer doesn't silently rely on the other.
-- Every `/api/resume`, `/api/purge`, and `/api/pause` request re-derives
-  the session's current state server-side from a fresh lookup; the
-  client's request body is only ever a `sessionId` key, never trusted for
-  anything safety-relevant.
+- Every `/api/resume`, `/api/purge`, `/api/pause`, and `/api/close`
+  request re-derives the session's current state server-side from a
+  fresh lookup; the client's request body is only ever a `sessionId` key,
+  never trusted for anything safety-relevant.
 - `superseded` sessions (see Features above) are refused for Resume —
   not because resuming an old session is unsafe, but because it's
   exactly the action that would grow a transcript you're trying to
@@ -198,11 +205,18 @@ Short version: it reads Claude Code's own per-session registry files plus
   'background'`, a real `id`) — see
   `docs/2026-09-13-pause-session-design.md` for why an interactive
   session can never satisfy it.
+- `/api/close` mirrors the same guard ordering but inverts the kind check
+  (`kind === 'interactive'`, a real `pid`) — plus one more check
+  `closeInteractiveSession()` runs itself right before acting: the target
+  pid must still resolve to a real `claude.exe` process, guarding
+  specifically against PID reuse, since ending a silently-recycled PID has
+  no safe undo. See the addendum in `docs/2026-09-13-pause-session-design.md`.
 
-**Never test `/api/resume`, `/api/purge`, or `/api/pause` against real
-session data you care about** — use synthetic `.jsonl` fixtures, or (for
-pause, verified 2026-09-13) a disposable `claude --bg` job you don't mind
-stopping, never a real one.
+**Never test `/api/resume`, `/api/purge`, `/api/pause`, or `/api/close`
+against real session data you care about** — use synthetic `.jsonl`
+fixtures, or (verified 2026-09-13 for both) a disposable `claude --bg` job
+or a disposable interactive session you don't mind ending, never a real
+one.
 
 ### Architecture diagrams
 

@@ -36,10 +36,16 @@ const PAUSE_ICON = `
     <rect x="14" y="5" width="4" height="14" rx="1" />
   </svg>
 `;
+const CLOSE_ICON = `
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+`;
 const SPINNER_ICON = `<span class="btn-icon-spinner"></span>`;
 
 const DELETE_LABEL = 'Delete session';
 const PAUSE_LABEL = 'Pause session';
+const CLOSE_LABEL = 'Close session';
 const CONFIRM_LABEL = 'Click again to confirm';
 
 // Sessions as last returned by the server — filters below never re-fetch,
@@ -79,6 +85,7 @@ let knownServerStartedAt = null;
 // other.
 const purgeConfirmTimers = new Map();
 const pauseConfirmTimers = new Map();
+const closeConfirmTimers = new Map();
 
 function clearConfirmTimer(timers, sessionId) {
   const timerId = timers.get(sessionId);
@@ -94,6 +101,10 @@ function clearPurgeConfirm(sessionId) {
 
 function clearPauseConfirm(sessionId) {
   clearConfirmTimer(pauseConfirmTimers, sessionId);
+}
+
+function clearCloseConfirm(sessionId) {
+  clearConfirmTimer(closeConfirmTimers, sessionId);
 }
 
 function sessionKey(s) {
@@ -470,6 +481,14 @@ function renderRow(row, session) {
   // never both render on the same row.
   const canPause = session.live && !session.liveUnknown && !session.superseded
     && session.kind === 'background' && typeof session.id === 'string' && session.id.length > 0;
+  // Close is Pause's counterpart for a live interactive session (mirrors
+  // server.mjs's canClose) — the one case Resume/Attach always disables
+  // outright (alreadyOpen, above) and canPause never covers, since an
+  // interactive session has no id. Ends the process by pid instead of a
+  // native Claude Code verb, since none exists for this case — see
+  // docs/2026-09-13-pause-session-design.md's addendum.
+  const canClose = session.live && !session.liveUnknown && !session.superseded
+    && session.kind === 'interactive' && typeof session.pid === 'number';
   const sizeLabel = formatSize(session.sizeBytes);
 
   // The row (and any armed confirm state) is about to be torn down and
@@ -481,6 +500,7 @@ function renderRow(row, session) {
   // armed — this is just the fallback for every other case.
   clearPurgeConfirm(session.sessionId);
   clearPauseConfirm(session.sessionId);
+  clearCloseConfirm(session.sessionId);
   row.classList.toggle('superseded-row', Boolean(session.superseded));
 
   row.innerHTML = `
@@ -506,6 +526,7 @@ function renderRow(row, session) {
         ${label}
       </button>
       ${canPause ? `<button class="icon-btn icon-btn-pause" data-action="pause" title="${PAUSE_LABEL}" aria-label="${PAUSE_LABEL}">${PAUSE_ICON}</button>` : ''}
+      ${canClose ? `<button class="icon-btn icon-btn-danger" data-action="close" title="${CLOSE_LABEL}" aria-label="${CLOSE_LABEL}">${CLOSE_ICON}</button>` : ''}
       ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="${DELETE_LABEL}" aria-label="${DELETE_LABEL}">${TRASH_ICON}</button>` : ''}
     </div>
   `;
@@ -514,6 +535,9 @@ function renderRow(row, session) {
   }
   if (canPause) {
     row.querySelector('[data-action="pause"]').addEventListener('click', (event) => handlePauseClick(session, event.currentTarget));
+  }
+  if (canClose) {
+    row.querySelector('[data-action="close"]').addEventListener('click', (event) => handleCloseClick(session, event.currentTarget));
   }
   if (canPurge) {
     row.querySelector('[data-action="purge"]').addEventListener('click', (event) => handlePurgeClick(session, event.currentTarget));
@@ -679,6 +703,16 @@ function handlePauseClick(session, button) {
   });
 }
 
+function handleCloseClick(session, button) {
+  handleConfirmClick({
+    timers: closeConfirmTimers,
+    session,
+    button,
+    normalLabel: CLOSE_LABEL,
+    onConfirm: () => closeSession(session, button),
+  });
+}
+
 // Unlike purgeSession's optimistic local removal (a file move this client
 // already knows succeeded), pausing changes what `claude agents` itself
 // reports — real external state this client hasn't polled yet — so success
@@ -702,6 +736,36 @@ async function pauseSession(session, button) {
     button.innerHTML = PAUSE_ICON;
     button.title = PAUSE_LABEL;
     button.setAttribute('aria-label', PAUSE_LABEL);
+    button.classList.add('shake');
+    button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
+  }
+}
+
+// Same reasoning as pauseSession: a real refetch, not a local guess, since
+// whether the session actually ended is real state this client hasn't
+// polled yet. The session's own terminal window stays open at a normal
+// prompt (verified live — see lib/closeSession.mjs) — only its process
+// tree ends, so there's nothing else for this client to reflect beyond
+// the row dropping out of live.
+async function closeSession(session, button) {
+  button.disabled = true;
+  button.classList.remove('armed');
+  button.innerHTML = SPINNER_ICON;
+  try {
+    const res = await fetch('/api/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: session.sessionId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    showToast(`Closed ${session.name} — its terminal stays open, resume it anytime`);
+    refreshNow();
+  } catch {
+    showToast(`Failed to close ${session.name}`);
+    button.disabled = false;
+    button.innerHTML = CLOSE_ICON;
+    button.title = CLOSE_LABEL;
+    button.setAttribute('aria-label', CLOSE_LABEL);
     button.classList.add('shake');
     button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
   }
@@ -731,10 +795,11 @@ function renderSessions(sessions) {
     if (row) {
       // A row with an armed purge- or pause-confirm timer is left
       // untouched: a routine poll or filter change re-rendering it from
-      // scratch would call clearPurgeConfirm()/clearPauseConfirm() (top of
-      // renderRow) and rebuild a fresh, unarmed button, silently defeating
-      // the two-click confirmation the user is mid-way through.
-      if (purgeConfirmTimers.has(key) || pauseConfirmTimers.has(key)) {
+      // scratch would call clearPurgeConfirm()/clearPauseConfirm()/
+      // clearCloseConfirm() (top of renderRow) and rebuild a fresh,
+      // unarmed button, silently defeating the two-click confirmation the
+      // user is mid-way through.
+      if (purgeConfirmTimers.has(key) || pauseConfirmTimers.has(key) || closeConfirmTimers.has(key)) {
         // leave as-is
       } else if (rowSignatures.get(key) !== signature) {
         renderRow(row, session);

@@ -13,6 +13,7 @@ import { mergeSessions } from './lib/mergeSessions.mjs';
 import { buildResumeCommand } from './lib/resumeCommand.mjs';
 import { purgeSessionFiles } from './lib/purgeSession.mjs';
 import { pauseBackgroundSession } from './lib/pauseSession.mjs';
+import { closeInteractiveSession } from './lib/closeSession.mjs';
 import { envWithoutIdentity } from './lib/cleanEnv.mjs';
 import { computeDaysUntilExpiry } from './lib/expiry.mjs';
 import { readActivitySidecar } from './lib/activitySidecar.mjs';
@@ -183,6 +184,21 @@ function canSafelyAct(session) {
 // already does for Resume/Attach.
 function canPause(session) {
   return session.live && canSafelyAct(session);
+}
+
+// Close is Pause's counterpart for an interactive session — the case
+// canSafelyAct always refuses (an interactive live session has no `id`
+// and no native stop verb). Same liveness/superseded guards as
+// canSafelyAct, but the kind check is inverted on purpose: this is the
+// one place a real process pid is the target instead of a background
+// job's id. See docs/2026-09-13-pause-session-design.md's addendum for
+// why a direct process end is the only mechanism that exists here, and
+// why it needs the /T (tree) scope lib/closeSession.mjs uses.
+function canClose(session) {
+  if (session.liveUnknown) return false;
+  if (session.superseded) return false;
+  if (!session.live) return false;
+  return session.kind === 'interactive' && typeof session.pid === 'number';
 }
 
 async function handleResume(req, res) {
@@ -401,6 +417,56 @@ async function handlePause(req, res) {
   }
 }
 
+async function handleClose(req, res) {
+  let body;
+  try {
+    body = await readRequestBody(req);
+  } catch {
+    res.writeHead(413).end('Request body too large');
+    return;
+  }
+
+  let requestBody;
+  try {
+    requestBody = JSON.parse(body);
+  } catch {
+    res.writeHead(400).end('Invalid JSON');
+    return;
+  }
+
+  if (
+    requestBody === null ||
+    typeof requestBody !== 'object' ||
+    Array.isArray(requestBody) ||
+    typeof requestBody.sessionId !== 'string'
+  ) {
+    res.writeHead(400).end('Invalid request: expected an object with sessionId');
+    return;
+  }
+
+  const sessions = await getSessionsPayload();
+  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
+
+  if (!session) {
+    res.writeHead(404).end('Unknown session');
+    return;
+  }
+
+  if (!canClose(session)) {
+    res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to close this session');
+    return;
+  }
+
+  try {
+    await closeInteractiveSession(session.pid);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  } catch (err) {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: String(err) }));
+  }
+}
+
 // Closing a browser tab doesn't touch the server process at all — it's
 // independent, launched from its own console window, and stays up until
 // that window closes or something tells it to stop. This is the "tell it
@@ -496,6 +562,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.url === '/api/close' && req.method === 'POST') {
+    if (req.headers['content-type'] !== 'application/json') {
+      res.writeHead(415).end('Unsupported Content-Type');
+      return;
+    }
+    try {
+      await handleClose(req, res);
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err) }));
+      } else {
+        res.end();
+      }
+    }
+    return;
+  }
   if (req.url === '/api/shutdown' && req.method === 'POST') {
     handleShutdown(req, res);
     return;
