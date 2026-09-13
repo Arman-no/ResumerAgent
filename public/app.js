@@ -653,15 +653,18 @@ async function purgeSession(session, button) {
   }
 }
 
-// Two-click confirmation shared by purge and pause: the first click arms a
-// short window during which a second click on the same button actually
-// fires the action. Arming briefly disables the button so a fast,
-// accidental double-click can't land both clicks before a person could
-// realistically react to the visual change. aria-label is updated
+// Two-click confirmation shared by purge, pause, and close: the first
+// click arms a short window during which a second click on the same
+// button actually fires the action. Arming briefly disables the button so
+// a fast, accidental double-click can't land both clicks before a person
+// could realistically react to the visual change. aria-label is updated
 // alongside title — an aria-label, once present, takes over the
 // accessible name entirely, so updating only `title` (as a mouse-hover
-// tooltip) would be invisible to keyboard/screen-reader users.
-function handleConfirmClick({ timers, session, button, normalLabel, onConfirm }) {
+// tooltip) would be invisible to keyboard/screen-reader users. A hover
+// tooltip alone is easy to miss entirely (you have to hover AND wait) —
+// user feedback 2026-09-13: also surface armToast as a real toast so the
+// "click again" instruction doesn't depend on noticing a tooltip at all.
+function handleConfirmClick({ timers, session, button, normalLabel, armToast, onConfirm }) {
   const key = session.sessionId;
   if (timers.has(key)) {
     clearConfirmTimer(timers, key);
@@ -669,6 +672,7 @@ function handleConfirmClick({ timers, session, button, normalLabel, onConfirm })
     return;
   }
 
+  showToast(armToast);
   button.title = CONFIRM_LABEL;
   button.setAttribute('aria-label', CONFIRM_LABEL);
   button.classList.add('armed', 'shake');
@@ -693,6 +697,7 @@ function handlePurgeClick(session, button) {
     session,
     button,
     normalLabel: DELETE_LABEL,
+    armToast: `Click the trash icon again to permanently delete ${session.name}`,
     onConfirm: () => purgeSession(session, button),
   });
 }
@@ -703,6 +708,7 @@ function handlePauseClick(session, button) {
     session,
     button,
     normalLabel: PAUSE_LABEL,
+    armToast: `Click the pause icon again to stop ${session.name} — it stays resumable`,
     onConfirm: () => pauseSession(session, button),
   });
 }
@@ -713,6 +719,7 @@ function handleCloseClick(session, button) {
     session,
     button,
     normalLabel: CLOSE_LABEL,
+    armToast: `Click the power icon again to close ${session.name} — its terminal stays open, resume it anytime`,
     onConfirm: () => closeSession(session, button),
   });
 }
