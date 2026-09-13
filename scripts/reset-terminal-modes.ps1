@@ -15,16 +15,27 @@ itself, not the process that set them.
 First fix attempt (output-stream mouse-tracking disables only) was
 INSUFFICIENT — confirmed live 2026-09-13 via direct user report: typed
 characters + Enter were clean, but arrow keys and mouse movement still
-produced garbage. Root-caused by checking GetConsoleMode on a real
-affected console after a real Close: input mode read 0x20F —
-ENABLE_VIRTUAL_TERMINAL_INPUT (0x200) was still set. Windows' own
-auto-recovery of the classic input flags (confirmed to happen in an
-earlier test) is NOT reliable enough to depend on here — it left a
-different, still-broken partial state this time (missing mouse-input,
-insert-mode, quick-edit too). Fixed by explicitly forcing the input mode
-via SetConsoleMode rather than hoping for auto-recovery, in addition to
-the output-stream mouse-tracking disables (still needed — they're a
-separate layer SetConsoleMode's INPUT-side flags don't touch).
+produced garbage. Root-caused to a second flag, ENABLE_VIRTUAL_TERMINAL_INPUT,
+not covered by the output-stream disables — fixed by forcing the input
+mode via SetConsoleMode too.
+
+Second fix attempt was ALSO insufficient — confirmed by the same real user
+report recurring after the input-mode fix shipped. Root-caused this time by
+adding diagnostic logging and running the REAL production call path
+(server -> closeSession.mjs -> execFile'd powershell), not a hand-run
+script: GetStdHandle was returning the handles this process was CREATED
+with (pipes, since Node's execFile redirects stdout/stdin to capture
+output for the promise), not the console this script attaches to via
+AttachConsole. Every write and SetConsoleMode call in both earlier fixes
+was silently acting on a discarded pipe; SetConsoleMode on the input pipe
+failed outright with ERROR_INVALID_HANDLE. The earlier "verified" 0x20F ->
+0x1F7 measurement was real, but only because that test ran the script
+directly, without execFile's pipe redirection — it never exercised the
+actual production path. Fixed by using CreateFile("CONOUT$"/"CONIN$")
+instead of GetStdHandle — the documented way to open the CURRENTLY
+ATTACHED console's real buffers regardless of what this process's own std
+handles point to. Re-verified end-to-end through the real HTTP
+/api/close -> closeSession.mjs -> this script path, not a hand-run test.
 
 Runs against the PARENT's console (the pid this script is given must be
 the surviving parent, e.g. cmd.exe — the target session's own pid is
@@ -42,7 +53,9 @@ namespace ResumerAgentConsoleReset {
   public class Native {
     [DllImport("kernel32.dll")] public static extern bool AttachConsole(uint dwProcessId);
     [DllImport("kernel32.dll")] public static extern bool FreeConsole();
-    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr CreateFile(string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+      IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
     [DllImport("kernel32.dll", SetLastError = true)]
     public static extern bool WriteFile(IntPtr hFile, byte[] lpBuffer, uint nNumberOfBytesToWrite, out uint lpNumberOfBytesWritten, IntPtr lpOverlapped);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
@@ -50,6 +63,24 @@ namespace ResumerAgentConsoleReset {
   }
 }
 '@
+
+# GetStdHandle deliberately NOT used here — see the second addendum above.
+# CreateFile("CONOUT$"/"CONIN$") always opens the console this process is
+# currently attached to, regardless of this process's own (possibly
+# pipe-redirected) standard handles.
+function Open-ConsoleHandle([string]$name) {
+  # 0x80000000/0x40000000 parse as negative Int32s in PowerShell; [uint32]
+  # then does a checked numeric conversion (not a bit-reinterpret) and
+  # throws on a negative source value. Decimal literals promote to a
+  # positive Int64 instead, which casts into UInt32 cleanly.
+  [uint32]$GENERIC_READ = 2147483648
+  [uint32]$GENERIC_WRITE = 1073741824
+  [uint32]$FILE_SHARE_READ = 0x1
+  [uint32]$FILE_SHARE_WRITE = 0x2
+  $OPEN_EXISTING = 3
+  [ResumerAgentConsoleReset.Native]::CreateFile($name, ($GENERIC_READ -bor $GENERIC_WRITE),
+    ($FILE_SHARE_READ -bor $FILE_SHARE_WRITE), [IntPtr]::Zero, $OPEN_EXISTING, 0, [IntPtr]::Zero)
+}
 
 [ResumerAgentConsoleReset.Native]::FreeConsole() | Out-Null
 $attached = [ResumerAgentConsoleReset.Native]::AttachConsole([uint32]$ParentPid)
@@ -59,8 +90,7 @@ if (-not $attached) {
 }
 
 try {
-  $STD_OUTPUT_HANDLE = -11
-  $hOut = [ResumerAgentConsoleReset.Native]::GetStdHandle($STD_OUTPUT_HANDLE)
+  $hOut = Open-ConsoleHandle "CONOUT$"
 
   # 1000/1002/1003: basic / button-event / any-event mouse click tracking.
   # 1006/1015: SGR / urxvt extended-coordinate encodings (either can be
@@ -84,8 +114,7 @@ try {
   # own recovery, which was directly observed to leave a still-broken
   # partial state (0x20F: VT input still on, several normal flags
   # missing) rather than a clean one.
-  $STD_INPUT_HANDLE = -10
-  $hIn = [ResumerAgentConsoleReset.Native]::GetStdHandle($STD_INPUT_HANDLE)
+  $hIn = Open-ConsoleHandle "CONIN$"
   $ENABLE_PROCESSED_INPUT = 0x0001
   $ENABLE_LINE_INPUT = 0x0002
   $ENABLE_ECHO_INPUT = 0x0004
