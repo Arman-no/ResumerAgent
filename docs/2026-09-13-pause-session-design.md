@@ -196,3 +196,51 @@ Covered by `lib/closeSession.test.mjs`.
 list above — there isn't one to reach for), and no change to Pause's own
 scope — a live background job still goes through `claude stop`, never
 through Close's tree-kill, since the gentler native path exists for it.
+
+## Second addendum (2026-09-13, same day): mouse-tracking corruption after Close
+
+Reported by the user after using Close on a real session: the surviving
+terminal echoed raw xterm SGR mouse-report escape codes
+(`ESC[<Cb;Cx;CyM`) on every mouse movement, permanently, until the window
+was closed and reopened — "it's like something that exists across Claude
+Code itself... it happened before too."
+
+**Root cause.** The classic console input-mode flags (echo, line input,
+processed input) reset on their own once a child process exits — already
+confirmed live in the main addendum above. VT-level modes are a different
+layer: the session's TUI enables mouse tracking for its own UI via a
+private-mode escape sequence, and normally disables it again as part of
+its own exit cleanup. A force-ended process never runs that cleanup, and
+Windows does not auto-clear VT modes the way it does the classic flags —
+so the parent terminal is left reporting every mouse move as raw escape
+bytes indefinitely. Genuinely upstream in how Windows/ConPTY handles an
+abruptly-ended VT-mode application, not specific to Close, but Close is
+what makes it reliably reproducible on demand.
+
+**Fix.** `scripts/reset-terminal-modes.ps1`, called from
+`closeInteractiveSession()` after a successful kill: attaches to the
+**parent's** console (looked up via `Get-CimInstance` *before* the kill —
+the target pid can't be asked "what was your parent" once it's gone) and
+writes the standard xterm disable sequences for every common
+mouse-tracking variant (1000/1002/1003 report modes, 1006/1015
+coordinate encodings), bracketed paste (2004), and the alternate screen
+buffer (1049), ending with a full VT reset (RIS, `ESC c`) as a catch-all.
+Best-effort by design — the close itself already succeeded regardless of
+this step, so a failure here (parent pid not found, `AttachConsole`
+failing) is logged and swallowed, never surfaced as a failed close.
+
+**Verification, and its honest limit.** The real script was run against a
+real live console after a real Close and exits clean (0) — confirms
+`AttachConsole`/`GetStdHandle`/`WriteFile`/`FreeConsole` all succeed
+end-to-end, not a guess. What wasn't achieved: a fully automated
+"simulate real mouse movement over the surviving window, read its console
+buffer, confirm zero garbage" loop — `GetWindowRect` on the console
+window returned a degenerate `0,0-0,0` rect in this environment (likely
+an artifact of how the disposable test session's window was spawned for
+testing, not necessarily true of a real user-opened terminal), and
+chasing that down further stopped being proportionate. The disable
+sequences themselves aren't a guess either way — they're the standard
+xterm private-mode codes, and RIS is what `reset(1)` sends on every
+VT-compatible terminal, which ConPTY is explicitly built to be. Confirm
+directly next time you use Close: hover the mouse over the surviving
+window afterward.
