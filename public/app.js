@@ -139,7 +139,19 @@ function statusKey(session) {
 
 function statusLabel(session) {
   if (session.superseded) return 'retired';
-  if (session.liveUnknown) return session.pidConfirmedAlive ? 'running elsewhere' : 'status unknown';
+  if (session.liveUnknown) {
+    if (!session.pidConfirmedAlive) return 'status unknown';
+    // The registry keeps a real status (idle/busy) updating even for a
+    // session `claude agents` itself never reports at all — confirmed
+    // 2026-09-14: an interactive session that parks a background job
+    // under it (registry's own parkedJobId) drops out of `claude agents`
+    // entirely while the process stays fully alive. A bare "running
+    // elsewhere" with no status made a perfectly idle session read as
+    // something to worry about, when the real status was known all along.
+    return session.status && session.status !== 'unknown'
+      ? `running elsewhere · ${session.status}`
+      : 'running elsewhere';
+  }
   return session.live ? `live · ${session.status}` : 'resumable';
 }
 
