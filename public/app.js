@@ -120,8 +120,14 @@ function sessionKey(s) {
 // renderSessions) precisely so it can keep advancing every poll without
 // needing a signature change, rather than being baked in here and forcing
 // a full rebuild every 5 seconds purely because time passed.
-function sessionSignature(session) {
-  return JSON.stringify(session);
+//
+// A parent's rendered row includes a summary of its child's own status
+// (see childLinkHtml) — folding the child's signature in too means the
+// parent's row correctly rebuilds when only the child changed, which its
+// own fields alone would never reveal.
+function sessionSignature(session, sessionsById) {
+  const child = session.childSessionId ? sessionsById?.get(session.childSessionId) : null;
+  return child ? JSON.stringify([session, child]) : JSON.stringify(session);
 }
 
 // The four states filterable in the sidebar — distinct from statusLabel
@@ -442,16 +448,14 @@ function updateResultCount(shown, total) {
   resultCountEl.classList.add('pop');
 }
 
-function renderRow(row, session) {
-  // A live interactive session already has an open terminal elsewhere,
-  // and a session whose liveness couldn't be confirmed might secretly be
-  // one too — acting on either has no safe use, and doing so against a
-  // real live session has previously destabilized other unrelated live
-  // sessions on the same machine. This button is genuinely disabled (no
-  // click handler attached at all), not just styled as secondary. The
-  // server enforces the same rule independently and is the load-bearing
-  // check (it re-resolves the session itself rather than trusting this
-  // client) — this is only the client-side half of that defense.
+// A live interactive session already has an open terminal elsewhere, and
+// a session whose liveness couldn't be confirmed might secretly be one
+// too — acting on either has no safe use, and doing so against a real
+// live session has previously destabilized other unrelated live sessions
+// on the same machine. Pulled out of renderRow so the exact same
+// disabled/label/title logic can drive the inline Attach button
+// childLinkHtml puts on a parent row, not just the row's own button.
+function computeAction(session) {
   const alreadyOpen = session.live && session.kind === 'interactive';
   // Not a safety concern the way liveUnknown is (see server.mjs's
   // canSafelyAct) — disabled anyway because resuming is exactly the
@@ -484,6 +488,30 @@ function renderRow(row, session) {
     : session.live
     ? 'Opens a terminal joined to this already-running session — does not start a new one'
     : 'Opens a new terminal and resumes this session';
+  return { disabled, label, actionClass, actionTitle };
+}
+
+// A parent session that parked a background job under it (see
+// mergeSessions.mjs) has no useful action of its own — Claude Code has no
+// CLI mechanism to attach to a live interactive terminal, only to a
+// background job — so the one thing worth surfacing here is the child's
+// own already-working action, plus enough of its status that "running
+// elsewhere" doesn't read as something wrong. Reuses computeAction
+// exactly as the child's own row would, rather than re-deriving it.
+function childLinkHtml(child) {
+  const { disabled, label, actionClass, actionTitle } = computeAction(child);
+  return `
+    <div class="row-child-link">
+      <span class="child-link-summary">⤷ Parent session · interactive — background job: <strong>${escapeHtml(statusLabel(child))}</strong></span>
+      <button class="btn btn-sm ${actionClass}" data-action="child-attach" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>${escapeHtml(label)}</button>
+      <button class="link-toggle" data-action="toggle-child" type="button" aria-expanded="false">▸ details</button>
+    </div>
+    <div class="child-detail hidden"></div>
+  `;
+}
+
+function renderRow(row, session, sessionsById) {
+  const { disabled, label, actionClass, actionTitle } = computeAction(session);
   // A session can only be purged once it's confirmed dead — never live,
   // never liveUnknown (same fail-closed reasoning as the resume guard,
   // but stricter: purging a live background session's files out from
@@ -506,6 +534,7 @@ function renderRow(row, session) {
   const canClose = session.live && !session.liveUnknown && !session.superseded
     && session.kind === 'interactive' && typeof session.pid === 'number';
   const sizeLabel = formatSize(session.sizeBytes);
+  const child = session.childSessionId ? sessionsById?.get(session.childSessionId) : null;
 
   // The row (and any armed confirm state) is about to be torn down and
   // rebuilt below — an in-flight "click again to confirm" window must not
@@ -532,6 +561,7 @@ function renderRow(row, session) {
         ${session.gitBranch ? `<span>· ${escapeHtml(session.gitBranch)}</span>` : ''}
         ${sizeLabel ? `<span>· ${sizeLabel}</span>` : ''}
       </div>
+      ${child ? childLinkHtml(child) : ''}
       ${session.preview ? `<p class="row-preview">${escapeHtml(session.preview)}</p>` : ''}
       ${activityStripHtml(session)}
       ${expiryBadgeHtml(session)}
@@ -547,7 +577,7 @@ function renderRow(row, session) {
     </div>
   `;
   if (!disabled) {
-    row.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session));
+    row.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session, row));
   }
   if (canPause) {
     row.querySelector('[data-action="pause"]').addEventListener('click', (event) => handlePauseClick(session, event.currentTarget));
@@ -558,13 +588,34 @@ function renderRow(row, session) {
   if (canPurge) {
     row.querySelector('[data-action="purge"]').addEventListener('click', (event) => handlePurgeClick(session, event.currentTarget));
   }
+  // Re-collapses on every rebuild (a signature change resets .child-detail
+  // to its empty template state) rather than preserving expansion across
+  // polls — accepted for now: this pair changes rarely enough in practice
+  // that re-expanding costs one extra click, not a redesign.
+  if (child) {
+    const toggle = row.querySelector('[data-action="toggle-child"]');
+    const detail = row.querySelector('.child-detail');
+    toggle.addEventListener('click', () => {
+      const expanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', String(!expanded));
+      toggle.textContent = expanded ? '▸ details' : '▾ hide';
+      detail.classList.toggle('hidden', expanded);
+      if (!expanded && detail.childElementCount === 0) {
+        detail.appendChild(buildRow(child, sessionsById));
+      }
+    });
+    const inlineAttach = row.querySelector('[data-action="child-attach"]');
+    if (inlineAttach && !inlineAttach.disabled) {
+      inlineAttach.addEventListener('click', (event) => resumeChildInline(child, event.currentTarget));
+    }
+  }
 }
 
-function buildRow(session) {
+function buildRow(session, sessionsById) {
   const row = document.createElement('article');
   row.className = 'session-row';
   row.dataset.key = sessionKey(session);
-  renderRow(row, session);
+  renderRow(row, session, sessionsById);
   return row;
 }
 
@@ -576,22 +627,31 @@ function showToast(message) {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3000);
 }
 
-async function resumeSession(session) {
-  const row = rowsByKey.get(session.sessionId);
+// Only sessionId is sent — the server resolves cwd/live/kind/id itself
+// from its own current session list rather than trusting this object,
+// which may be a few seconds stale from the last poll. Shared between
+// resumeSession (a real row to rebuild afterward) and resumeChildInline
+// (the summary button on a parent row, with no row of its own).
+async function postResume(sessionId) {
+  const res = await fetch('/api/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// row is the caller's own element to rebuild afterward — not re-derived
+// via rowsByKey, since a nested child row (rendered inside a parent's
+// row when expanded — see childLinkHtml's toggle) is a real, attached
+// element that was never added to rowsByKey at all.
+async function resumeSession(session, row) {
   const button = row.querySelector('[data-action="resume"]');
   button.disabled = true;
   button.textContent = '…';
   let succeeded = true;
   try {
-    // Only sessionId is sent — the server resolves cwd/live/kind/id itself
-    // from its own current session list rather than trusting this object,
-    // which may be a few seconds stale from the last poll.
-    const res = await fetch('/api/resume', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: session.sessionId }),
-    });
-    if (!res.ok) throw new Error(await res.text());
+    await postResume(session.sessionId);
     showToast(`Opening terminal for ${session.name}…`);
     button.textContent = '✓ Opened';
     button.classList.add('btn-flash-success');
@@ -607,6 +667,30 @@ async function resumeSession(session) {
   // same tick they were added, so neither was ever visible.
   await new Promise((resolve) => setTimeout(resolve, succeeded ? 700 : 500));
   renderRow(row, session);
+}
+
+// The inline Attach button on a parent row (childLinkHtml) has no row of
+// its own to rebuild — the child isn't rendered as a row at all unless
+// expanded — so this gives the same network call and toast feedback,
+// scoped to just the button itself.
+async function resumeChildInline(child, button) {
+  button.disabled = true;
+  const original = button.textContent;
+  button.textContent = '…';
+  try {
+    await postResume(child.sessionId);
+    showToast(`Opening terminal for ${child.name}…`);
+    button.textContent = '✓ Opened';
+    button.classList.add('btn-flash-success');
+  } catch {
+    showToast(`Failed to resume ${child.name}`);
+    button.textContent = '✕ Failed';
+    button.classList.add('shake');
+  }
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  button.disabled = false;
+  button.textContent = original;
+  button.classList.remove('btn-flash-success', 'shake');
 }
 
 async function purgeSession(session, button) {
@@ -803,7 +887,7 @@ function renderSkeleton() {
   }
 }
 
-function renderSessions(sessions) {
+function renderSessions(sessions, sessionsById) {
   // renderSkeleton() appends placeholder rows directly to the list without
   // registering them in rowsByKey, since they represent no real session.
   // Clear them here so they don't linger after the first successful load.
@@ -814,7 +898,7 @@ function renderSessions(sessions) {
     const key = sessionKey(session);
     seenKeys.add(key);
     let row = rowsByKey.get(key);
-    const signature = sessionSignature(session);
+    const signature = sessionSignature(session, sessionsById);
     if (row) {
       // A row with an armed purge- or pause-confirm timer is left
       // untouched: a routine poll or filter change re-rendering it from
@@ -825,7 +909,7 @@ function renderSessions(sessions) {
       if (purgeConfirmTimers.has(key) || pauseConfirmTimers.has(key) || closeConfirmTimers.has(key)) {
         // leave as-is
       } else if (rowSignatures.get(key) !== signature) {
-        renderRow(row, session);
+        renderRow(row, session, sessionsById);
         rowSignatures.set(key, signature);
       } else {
         // Nothing about the session changed — skip the full rebuild (the
@@ -836,7 +920,7 @@ function renderSessions(sessions) {
         if (whenEl) whenEl.textContent = relativeTime(session.updatedAt);
       }
     } else {
-      row = buildRow(session);
+      row = buildRow(session, sessionsById);
       row.style.animationDelay = `${index * 30}ms`;
       rowsByKey.set(key, row);
       rowSignatures.set(key, signature);
@@ -869,9 +953,18 @@ function renderSessions(sessions) {
 function refreshView() {
   if (rawSessions === null) return;
   const total = rawSessions.length;
+  const sessionsById = new Map(rawSessions.map((s) => [s.sessionId, s]));
   const filtered = applyFilters(rawSessions);
+  // A child whose parent also survived the current filters is folded into
+  // the parent's own row (see childLinkHtml) instead of appearing a
+  // second time as its own top-level row. It still counts toward the
+  // shown/total tally below — nesting is a display choice, not a filter —
+  // and if the parent itself didn't survive filtering, the child still
+  // renders normally on its own.
+  const filteredIds = new Set(filtered.map((s) => s.sessionId));
+  const visible = filtered.filter((s) => !(s.parentSessionId && filteredIds.has(s.parentSessionId)));
   updateResultCount(filtered.length, total);
-  renderSessions(filtered);
+  renderSessions(visible, sessionsById);
   emptyEl.classList.toggle('hidden', total > 0);
   noMatchesEl.classList.toggle('hidden', !(total > 0 && filtered.length === 0));
 }
