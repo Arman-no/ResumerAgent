@@ -478,6 +478,51 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   font-size: 11px;
 }
 
+/* A parent session that parked a background job under it (mergeSessions.mjs's
+   parentSessionId/childSessionId) — surfaces the child's own status and
+   action inline, since the parent's own action is always disabled (no CLI
+   attach exists for a live interactive session). */
+.row-child-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.child-link-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.link-toggle {
+  background: none;
+  border: none;
+  color: var(--accent-text);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+.link-toggle:hover { text-decoration: underline; }
+
+/* Holds the nested child row once expanded — the connecting line is the
+   one visual element that actually reads as "hierarchy" rather than just
+   "a card with extra text on it". */
+.child-detail {
+  margin: 6px 0 0 14px;
+  padding-left: 12px;
+  border-left: 2px solid var(--accent);
+}
+.child-detail .session-row { animation: none; }
+
+.btn-sm { width: auto; padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
+
 /* Groups cost/context/rate-limits into their own small, visually set-apart
    strip — surface-2 (one step up from the row's own surface background) is
    what separates it from the file-metadata line (.row-sub: branch/size)
