@@ -138,6 +138,19 @@ ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
   afterward exactly like any other ended session. See the addendum in
   `docs/2026-09-13-pause-session-design.md` for what else was tried first
   and why it didn't work.
+- **Parent/child hierarchy for parked background jobs.** An interactive
+  session that parks a background job under it (Claude Code's own
+  registry field, `parkedJobId`) drops out of `claude agents --json
+  --all` entirely, even while genuinely alive — it would otherwise show
+  as a confusing, unrelated "running elsewhere" row. The parent row now
+  shows a "parent" badge, an inline summary of the child's real status,
+  the child's own working Attach button, and a "▸ details" toggle that
+  nests the full child row underneath with a connecting line. The
+  parent's own status pill also mirrors the child's status/color once a
+  linked child is confirmed live, rather than showing its own
+  always-uncertain hedge. See `lib/mergeSessions.mjs`'s
+  parentSessionId/childSessionId linking pass and `childLinkHtml()` in
+  `public/app.js`.
 
 ## Activity panel
 
