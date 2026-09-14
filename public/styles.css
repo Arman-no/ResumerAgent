@@ -521,7 +521,31 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 }
 .child-detail .session-row { animation: none; }
 
-.btn-sm { width: auto; padding: 4px 10px; font-size: 12px; flex-shrink: 0; }
+/* Scoped like .row-actions .btn below (same reason: a bare .btn/.btn-sm
+   pair is equal specificity, so whichever rule happens to come later in
+   this file wins the cascade regardless of intent — confirmed as the
+   actual cause of this button rendering full-width instead of compact).
+   Matches .pill's own compact sizing rather than inventing a new scale. */
+.row-child-link .btn {
+  width: auto;
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+/* Distinguishes a parent/child pair that happens to share the same
+   session name (Claude Code lets a background job inherit its parent's
+   name) — without this, two identically-named rows read as unrelated
+   duplicates rather than one linked session. Compound selector, not a
+   bare .badge-role: .badge itself is declared later in this file, and an
+   equal-specificity bare class would lose that background/color override
+   to it — the same cascade-order trap just fixed for .row-child-link .btn
+   above, caught here before shipping it a second time. */
+.badge.badge-role {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent-text);
+}
 
 /* Groups cost/context/rate-limits into their own small, visually set-apart
    strip — surface-2 (one step up from the row's own surface background) is

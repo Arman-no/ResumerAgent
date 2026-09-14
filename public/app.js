@@ -130,6 +130,18 @@ function sessionSignature(session, sessionsById) {
   return child ? JSON.stringify([session, child]) : JSON.stringify(session);
 }
 
+// A parent's own liveness is exactly the gap that produces "running
+// elsewhere" (claude agents doesn't report an interactive session once it
+// parks a background job under it) — but the child IS independently
+// confirmed, so once we have it, its status is strictly more informative
+// than the parent's own hedge. Shared by statusKey/statusLabel/statusClass
+// below rather than duplicated in each.
+function childStatusOverride(session, sessionsById) {
+  if (!session.childSessionId || !sessionsById) return null;
+  const child = sessionsById.get(session.childSessionId);
+  return child && !child.liveUnknown ? child : null;
+}
+
 // The four states filterable in the sidebar — distinct from statusLabel
 // below, which additionally shows *what* a live session is doing
 // (idle/busy/waiting). Filtering only needs the coarser live/resumable/
@@ -137,14 +149,18 @@ function sessionSignature(session, sessionsById) {
 // what would otherwise read as "resumable" (not live, liveness confirmed),
 // but nothing useful can be done with it besides purge, so it gets its own
 // filter instead of being silently lumped in with genuinely-resumable ones.
-function statusKey(session) {
+function statusKey(session, sessionsById) {
   if (session.superseded) return 'superseded';
+  const child = childStatusOverride(session, sessionsById);
+  if (child) return statusKey(child, sessionsById);
   if (session.liveUnknown) return 'unknown';
   return session.live ? 'live' : 'resumable';
 }
 
-function statusLabel(session) {
+function statusLabel(session, sessionsById) {
   if (session.superseded) return 'retired';
+  const child = childStatusOverride(session, sessionsById);
+  if (child) return statusLabel(child, sessionsById);
   if (session.liveUnknown) {
     if (!session.pidConfirmedAlive) return 'status unknown';
     // The registry keeps a real status (idle/busy) updating even for a
@@ -161,8 +177,10 @@ function statusLabel(session) {
   return session.live ? `live · ${session.status}` : 'resumable';
 }
 
-function statusClass(session) {
+function statusClass(session, sessionsById) {
   if (session.superseded) return 'status-superseded';
+  const child = childStatusOverride(session, sessionsById);
+  if (child) return statusClass(child, sessionsById);
   if (session.liveUnknown) return session.pidConfirmedAlive ? 'status-external' : 'status-resumable';
   return session.live ? `status-${session.status}` : 'status-resumable';
 }
@@ -419,10 +437,10 @@ function compareSessions(a, b, sortBy) {
   }
 }
 
-function applyFilters(sessions) {
+function applyFilters(sessions, sessionsById) {
   return sessions
     .filter((s) =>
-      filterState.statuses.has(statusKey(s)) &&
+      filterState.statuses.has(statusKey(s, sessionsById)) &&
       matchesWhen(s, filterState.when) &&
       matchesSearch(s, filterState.search)
     )
@@ -498,12 +516,12 @@ function computeAction(session) {
 // own already-working action, plus enough of its status that "running
 // elsewhere" doesn't read as something wrong. Reuses computeAction
 // exactly as the child's own row would, rather than re-deriving it.
-function childLinkHtml(child) {
+function childLinkHtml(child, sessionsById) {
   const { disabled, label, actionClass, actionTitle } = computeAction(child);
   return `
     <div class="row-child-link">
-      <span class="child-link-summary">⤷ Parent session · interactive — background job: <strong>${escapeHtml(statusLabel(child))}</strong></span>
-      <button class="btn btn-sm ${actionClass}" data-action="child-attach" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>${escapeHtml(label)}</button>
+      <span class="child-link-summary">⤷ background job: <strong>${escapeHtml(statusLabel(child, sessionsById))}</strong></span>
+      <button class="btn ${actionClass}" data-action="child-attach" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>${escapeHtml(label)}</button>
       <button class="link-toggle" data-action="toggle-child" type="button" aria-expanded="false">▸ details</button>
     </div>
     <div class="child-detail hidden"></div>
@@ -549,7 +567,7 @@ function renderRow(row, session, sessionsById) {
   row.classList.toggle('superseded-row', Boolean(session.superseded));
 
   row.innerHTML = `
-    <span class="row-status pill ${statusClass(session)}">${escapeHtml(statusLabel(session))}</span>
+    <span class="row-status pill ${statusClass(session, sessionsById)}">${escapeHtml(statusLabel(session, sessionsById))}</span>
     <div class="row-main">
       <div class="row-top">
         <span class="row-name">${escapeHtml(session.name)}</span>
@@ -558,10 +576,11 @@ function renderRow(row, session, sessionsById) {
       <div class="row-sub muted" title="${escapeHtml(session.cwd)}">
         <span class="row-cwd">${escapeHtml(session.cwd)}</span>
         <span class="badge">${session.kind === 'background' ? 'background' : 'interactive'}</span>
+        ${child ? '<span class="badge badge-role">parent</span>' : ''}
         ${session.gitBranch ? `<span>· ${escapeHtml(session.gitBranch)}</span>` : ''}
         ${sizeLabel ? `<span>· ${sizeLabel}</span>` : ''}
       </div>
-      ${child ? childLinkHtml(child) : ''}
+      ${child ? childLinkHtml(child, sessionsById) : ''}
       ${session.preview ? `<p class="row-preview">${escapeHtml(session.preview)}</p>` : ''}
       ${activityStripHtml(session)}
       ${expiryBadgeHtml(session)}
@@ -601,7 +620,17 @@ function renderRow(row, session, sessionsById) {
       toggle.textContent = expanded ? '▸ details' : '▾ hide';
       detail.classList.toggle('hidden', expanded);
       if (!expanded && detail.childElementCount === 0) {
-        detail.appendChild(buildRow(child, sessionsById));
+        const childRow = buildRow(child, sessionsById);
+        // The child can share its parent's exact name (Claude Code lets a
+        // background job inherit the interactive session's own name) —
+        // confirmed confusing 2026-09-14: two identically-named rows
+        // stacked with no marker reading as unrelated duplicates rather
+        // than one linked pair.
+        childRow.querySelector('.row-sub')?.insertAdjacentHTML(
+          'afterbegin',
+          '<span class="badge badge-role">background job</span>'
+        );
+        detail.appendChild(childRow);
       }
     });
     const inlineAttach = row.querySelector('[data-action="child-attach"]');
@@ -954,7 +983,7 @@ function refreshView() {
   if (rawSessions === null) return;
   const total = rawSessions.length;
   const sessionsById = new Map(rawSessions.map((s) => [s.sessionId, s]));
-  const filtered = applyFilters(rawSessions);
+  const filtered = applyFilters(rawSessions, sessionsById);
   // A child whose parent also survived the current filters is folded into
   // the parent's own row (see childLinkHtml) instead of appearing a
   // second time as its own top-level row. It still counts toward the
