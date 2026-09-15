@@ -1028,6 +1028,11 @@ async function loadSessions() {
     }
     rawSessions = payload.sessions;
     renderStats(payload.stats);
+    const liveStatusBannerEl = document.getElementById('live-status-banner');
+    liveStatusBannerEl.classList.toggle('hidden', !payload.liveStatusError);
+    liveStatusBannerEl.textContent = payload.liveStatusError
+      ? `Can't check which sessions are live, so every row shows "Status unknown" and actions stay locked. Claude Code CLI error: ${payload.liveStatusError}`
+      : '';
     errorEl.classList.add('hidden');
     refreshView();
     // Store the actual fetch time — computing relativeTime(Date.now())
