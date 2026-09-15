@@ -51,8 +51,8 @@ const DISCOVERY_WINDOW_MS = config.cleanupPeriodDays
   ? Math.max(DEFAULT_DISCOVERY_WINDOW_MS, config.cleanupPeriodDays * 24 * 60 * 60 * 1000)
   : DEFAULT_DISCOVERY_WINDOW_MS;
 
-async function getSessionsPayload() {
-  const [transcriptEntries, registryEntries, liveEntries] = await Promise.all([
+async function getSessionsWithLiveStatus() {
+  const [transcriptEntries, registryEntries, live] = await Promise.all([
     Promise.resolve(discoverSessions(config.sessionsRoot, DISCOVERY_WINDOW_MS)),
     Promise.resolve(readSessionRegistry(config.sessionsRoot)),
     readLiveAgents(),
@@ -61,7 +61,7 @@ async function getSessionsPayload() {
   const sessions = mergeSessions(
     transcriptEntries,
     registryEntries,
-    liveEntries,
+    live.agents,
     // entry.filePath is set for transcript-discovered sessions (the real
     // path discoverSessions.mjs already found them at); the live-only
     // fallback branch in mergeSessions.mjs passes an entry with no
@@ -75,7 +75,7 @@ async function getSessionsPayload() {
   // session (updatedAt, sessionId) plus this server's own resolved config —
   // kept out of mergeSessions.mjs itself so that module stays unaware of
   // cleanupPeriodDays/sidecar concerns it has no other reason to know about.
-  return sessions.map((session) => {
+  const enriched = sessions.map((session) => {
     // The sidecar (lib/activitySidecar.mjs) is Claude Code's own
     // statusline-computed number, written fresh on every refresh — prefer
     // it over the transcript-tail approximation whenever it's present,
@@ -101,6 +101,12 @@ async function getSessionsPayload() {
       rateLimitsUpdatedAt: sidecar?.updated_at ? sidecar.updated_at * 1000 : null,
     };
   });
+
+  return { sessions: enriched, liveStatusError: live.error };
+}
+
+async function getSessionsPayload() {
+  return (await getSessionsWithLiveStatus()).sessions;
 }
 
 // Binding to 127.0.0.1 only blocks requests from OUTSIDE the machine — it
@@ -493,14 +499,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/api/sessions' && req.method === 'GET') {
     try {
-      const sessions = await getSessionsPayload();
+      const { sessions, liveStatusError } = await getSessionsWithLiveStatus();
       // Computed over every session this dashboard currently sees, not the
       // client's filtered/sorted view — the stat cards are meant to answer
       // "what's true across everything," independent of whatever the
       // sidebar filters happen to be narrowed to right now.
       const stats = computeStatsSummary(sessions);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions, stats }));
+      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions, stats, liveStatusError }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(err) }));

@@ -779,6 +779,17 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   cursor: pointer;
 }
 
+.live-status-banner {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  border: 1px solid rgba(var(--warning-rgb), 0.35);
+  border-radius: var(--radius-md);
+  background: rgba(var(--warning-rgb), 0.12);
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .hidden { display: none !important; }
 
 .update-banner {
