@@ -623,6 +623,10 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .rate-value.rate-green::before { background: var(--success); }
 .rate-value.rate-yellow::before { background: var(--warning); }
 .rate-value.rate-red::before { background: var(--critical); }
+.rate-bar { font-family: var(--font-mono); letter-spacing: 0.02em; }
+.rate-sep { color: var(--text-muted); }
+.rate-line { flex-wrap: wrap; column-gap: 6px; row-gap: 2px; }
+.rate-seg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 
 .expiry-badge {
   color: var(--warning);
