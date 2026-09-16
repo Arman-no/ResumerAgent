@@ -529,6 +529,9 @@ state on refresh.
   colleague on macOS/Linux cannot run this as-is regardless of
   `RESUME_COMMAND`/`ATTACH_COMMAND`, since the *outer* shell that opens a
   new terminal window is not configurable. The README says so explicitly.
+  (Superseded 2026-09-16 by `feature/cross-platform`: the outer shell is
+  now resolved per-OS, with a `TERMINAL_COMMAND` override — see the
+  current README.)
 
 ## Distribution
 
@@ -600,7 +603,9 @@ Also added in this pass:
   `createdAt` per session: `lib/discoverSessions.mjs` now also captures
   `stat.birthtimeMs` (NTFS tracks true creation time; safe to rely on
   since this tool is Windows-only), separate from `updatedAt`
-  (`stat.mtimeMs`, unchanged).
+  (`stat.mtimeMs`, unchanged). (Superseded 2026-09-16: now cross-platform;
+  `discoverSessions.mjs` falls back to `mtimeMs` on filesystems that report
+  no birthtime.)
 - **"No Name" fallback**: a session with no registry-recorded name used to
   fall back to its own preview text (the last real typed message) as a
   stand-in name — which just duplicated the preview line directly below

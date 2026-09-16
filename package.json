@@ -4,9 +4,12 @@
   "description": "Local dashboard for finding and resuming dead/live Claude Code sessions across directories.",
   "type": "module",
   "private": true,
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/Arman-no/ResumerAgent.git" },
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node server.mjs",
-    "launch": "node scripts/launch.mjs"
+    "launch": "node scripts/launch.mjs",
+    "test": "node --test"
   }
 }
