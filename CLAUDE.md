@@ -1,10 +1,9 @@
 # ResumerAgent — Operating Notes
 
 Read by every Claude Code session working in this repo, on any machine.
-This project is worked on from more than one place (at least: the owner's
-personal machine, and a separate work system behind Docker+a proxy) —
-never at the same time, but at different times, so this rule is what keeps
-that safe without any special coordination between sessions.
+This project is worked on from more than one machine — never at the same
+time, but at different times, so this rule is what keeps that safe without
+any special coordination between sessions.
 
 ## Git collaboration hygiene — hard rule, every session
 
