@@ -7,6 +7,7 @@
   <a href="#install--quickstart"><img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg" alt="Node >=18" /></a>
   <a href="#cross-platform-support"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational.svg" alt="Platforms: Windows, macOS, Linux" /></a>
   <a href="https://github.com/Arman-no/ResumerAgent/actions/workflows/tests.yml"><img src="https://github.com/Arman-no/ResumerAgent/actions/workflows/tests.yml/badge.svg" alt="Tests" /></a>
+  <a href="https://github.com/sponsors/Arman-no"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white" alt="Sponsor" /></a>
 </p>
 
 <p align="center">
