@@ -367,6 +367,26 @@ a rule it already settled. And per the [Safety model](#safety-model)
 above: never run `/api/resume`, `/api/purge`, `/api/pause`, or
 `/api/close` against real session data while testing a change.
 
+## Sponsors
+
+ResumerAgent is free, MIT, and has no dependencies to fund. If it handed
+back a session you thought was gone, you can support the work here:
+
+<p align="center">
+  <a href="https://github.com/sponsors/Arman-no"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white" alt="Sponsor on GitHub" /></a>
+</p>
+
+## Author
+
+Built by **Arman Nouromid** — data engineer, building tools that keep AI
+coding sessions from disappearing.
+
+<p align="center">
+  <a href="https://armannouromid.com">Website</a> &middot;
+  <a href="https://github.com/Arman-no">GitHub</a> &middot;
+  <a href="https://www.linkedin.com/in/arman-nouromid/">LinkedIn</a>
+</p>
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
