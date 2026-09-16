@@ -175,6 +175,11 @@ Short version: it reads Claude Code's own per-session registry files plus
 `claude agents --json --all`, merges them, and shows one dashboard.
 ```
 
+> Superseded 2026-09-16: the "Windows only" requirement above was true at
+> plan time but no longer is — `feature/cross-platform` added macOS/Linux
+> terminal spawning and a `TERMINAL_COMMAND` override. See the current
+> `README.md`, not this quoted snapshot, for up-to-date requirements.
+
 - [ ] **Step 6: Verify and commit**
 
 Run: `git status` — expect to see the four new files untracked, nothing else.
