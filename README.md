@@ -17,9 +17,19 @@ detection) already hit once on the original dev machine.
 
 ## Requirements
 
-- **Windows only.** Resume/Attach open a new terminal via `cmd.exe`,
-  hardcoded — there's no cross-platform way to configure around this, so
-  this tool doesn't run usefully on macOS/Linux as-is.
+- **Windows, macOS, or Linux.** Resume/Attach spawn a terminal window the
+  way each OS actually supports: `cmd.exe`/`start` on Windows, Terminal.app
+  via `osascript` on macOS, and on Linux the first installed emulator out
+  of `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`,
+  `alacritty`, `kitty`, `xterm` (see `lib/terminalCommand.mjs`). No
+  supported emulator found, or you want a specific one — iTerm, WezTerm,
+  Warp, tmux — on any OS? Set `TERMINAL_COMMAND` (see Configuration).
+  Every session row also has a copy button that puts the resume command on
+  the clipboard, which works no matter what: the fallback for SSH, tmux,
+  or a terminal this tool doesn't know how to drive.
+  **The Windows path is the one exercised on real hardware; macOS and
+  Linux are covered by unit tests with the platform and PATH probe
+  injected, not yet run on real machines.**
 - Node.js 18+ (npm ships with it — nothing else to install)
 - Claude Code CLI (`claude`) reachable on PATH for the live-session overlay
   and for the resume/attach commands themselves
@@ -65,13 +75,19 @@ once it notices the server restarted.
 
 ## Configuration
 
-Two things, both optional, set via `.env` or your shell:
+Three things, all optional, set via `.env` or your shell:
 
 - `SESSIONS_ROOT` — directory containing Claude Code's `sessions/` and
   `projects/` folders. Defaults to `$CLAUDE_CONFIG_DIR`, then `~/.claude`.
 - `RESUME_COMMAND` / `ATTACH_COMMAND` — command templates
   (`{cwd}`, `{sessionId}`, `{id}` placeholders) run when you click
   Resume/Attach. Defaults assume a native install with `claude` on PATH.
+- `TERMINAL_COMMAND` — overrides how Resume/Attach opens a terminal
+  window, on any OS. Placeholders: `{command}`, `{title}`, `{cwd}`. Use it
+  when the built-in per-OS default doesn't fit — a Linux box with none of
+  the auto-detected emulators installed, or you just want a specific
+  terminal (iTerm, WezTerm, Warp, tmux, ...) every time. See
+  `.env.example` for a `gnome-terminal` example.
 
 ### Running Claude Code through Docker?
 
@@ -108,6 +124,12 @@ ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
 - **Fail-closed safety.** If liveness can't be confirmed, Resume/Attach/
   Purge are refused outright rather than guessed at. See "How it works"
   below for the full model.
+- **Copy resume command.** Every session row has a copy button (it renders
+  even on rows where Resume is disabled) that puts the resume command on
+  the clipboard instead of spawning a terminal — the fallback when
+  Resume/Attach's terminal spawn isn't available or isn't what you want:
+  over SSH, inside tmux, or in a terminal emulator this tool doesn't know
+  how to drive.
 - **Session expiry warning.** Claude Code silently deletes a session's
   transcript once it's older than `cleanupPeriodDays` (from
   `<SESSIONS_ROOT>/settings.json`, default 30 days, `0` = disabled). Any
@@ -132,12 +154,17 @@ ATTACH_COMMAND=docker exec -it my-claude-container claude attach {id}
   terminal someone has open — the case Pause can't cover, since Claude
   Code exposes no native stop for it) gets a Close (✕) button instead,
   same two-click confirm. Ends the session's whole process tree (its own
-  LSP/MCP helper processes included, not just the top-level process) via
-  `taskkill /PID <pid> /T /F` — verified live that the parent terminal
-  window survives and stays usable, and the session remains resumable
-  afterward exactly like any other ended session. See the addendum in
-  `docs/2026-09-13-pause-session-design.md` for what else was tried first
-  and why it didn't work.
+  LSP/MCP helper processes included, not just the top-level process) — on
+  Windows via `taskkill /PID <pid> /T /F`; on macOS/Linux via one
+  `ps -eo pid=,ppid=,comm=` read to find the identity/parent/descendant
+  tree followed by a single `kill` (`lib/closeSession.mjs`), keeping the
+  same PID-reuse guard and the same "a kill failure is fine once the
+  target is confirmed gone" behavior. Verified live on Windows that the
+  parent terminal window survives and stays usable, and the session
+  remains resumable afterward exactly like any other ended session; the
+  macOS/Linux path is unit-tested only, not yet run on real hardware. See
+  the addendum in `docs/2026-09-13-pause-session-design.md` for what else
+  was tried first and why it didn't work.
 - **Parent/child hierarchy for parked background jobs.** An interactive
   session that parks a background job under it (Claude Code's own
   registry field, `parkedJobId`) drops out of `claude agents --json
@@ -221,7 +248,8 @@ Short version: it reads Claude Code's own per-session registry files plus
 - `/api/close` mirrors the same guard ordering but inverts the kind check
   (`kind === 'interactive'`, a real `pid`) — plus one more check
   `closeInteractiveSession()` runs itself right before acting: the target
-  pid must still resolve to a real `claude.exe` process, guarding
+  pid must still resolve to a real `claude` process (`claude.exe` via
+  `tasklist` on Windows, `ps`'s `comm` field on macOS/Linux), guarding
   specifically against PID reuse, since ending a silently-recycled PID has
   no safe undo. See the addendum in `docs/2026-09-13-pause-session-design.md`.
 
