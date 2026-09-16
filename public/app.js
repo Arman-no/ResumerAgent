@@ -285,18 +285,13 @@ function costContextLineHtml(session) {
   return `<div class="activity-line">${items.join('')}</div>`;
 }
 
-// Mirrors this user's own statusline footer exactly (~/.claude/statusline.ps1
-// Bar + RateLimitSegment): "Usage #--------- 19% (resets in 3h 36m) | Week
-// #####----- 52% (resets in 2d 4h)". The earlier "Rate limit — 5h: 17% · 7d:
-// 52% (as of 13m ago)" line read as confusing next to the footer the user
-// actually watches. "resets in" counts down from resets_at against now, not
+// Mirrors this user's own statusline footer (~/.claude/statusline.ps1
+// RateLimitSegment): "Usage [bar] 19% (resets in 3h 36m) | Week [bar] 52%
+// (resets in 2d 4h)", with the same progress bar as the context item
+// instead of the terminal's #/- text bar, so the strip reads as one component.
+// The earlier "Rate limit — 5h: 17% · 7d: 52% (as of 13m ago)" line read as
+// confusing next to the footer the user actually watches. "resets in" counts down from resets_at against now, not
 // the sidecar's write time, so a stale sidecar still shows the right reset.
-function textBar(pct, width = 10) {
-  const p = Math.max(0, Math.min(100, Math.trunc(pct)));
-  const filled = Math.floor((p * width) / 100);
-  return '#'.repeat(filled) + '-'.repeat(width - filled);
-}
-
 function resetsIn(resetsAtSec) {
   const secsLeft = Math.max(0, resetsAtSec - Math.floor(Date.now() / 1000));
   const totalHours = Math.floor(secsLeft / 3600);
@@ -314,7 +309,7 @@ function rateLimitSegmentHtml(label, win, sep = '') {
     : win.resets_at * 1000 <= Date.now()
       ? ' <span class="activity-freshness">(reset since last update)</span>'
       : ` <span class="activity-freshness">(resets in ${resetsIn(win.resets_at)})</span>`;
-  return `<span class="rate-seg">${sep}<span class="rate-value rate-${usageBand(pct)}">${label} <span class="rate-bar">${textBar(pct)}</span> ${pct}%</span>${reset}</span>`;
+  return `<span class="rate-seg">${sep}<span class="rate-value">${label} <span class="context-bar-track"><span class="context-bar-fill context-${usageBand(pct)}" style="width:${Math.min(100, pct)}%"></span></span> ${pct}%</span>${reset}</span>`;
 }
 
 function rateLimitLineHtml(session) {
