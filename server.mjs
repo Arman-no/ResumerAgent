@@ -604,10 +604,18 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
+// No portable "open this URL" command exists: Windows goes through cmd's
+// `start`, macOS has `open`, most Linux desktops have `xdg-open`.
+function openBrowserCommand(url) {
+  if (process.platform === 'win32') return `cmd /c start "" "${url}"`;
+  if (process.platform === 'darwin') return `open "${url}"`;
+  return `xdg-open "${url}"`;
+}
+
 server.listen(config.port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${config.port}`;
   console.log(`ResumerAgent dashboard: ${url}`);
-  exec(`cmd /c start "" "${url}"`, (err) => {
+  exec(openBrowserCommand(url), (err) => {
     if (err) console.error('Failed to open browser:', err);
   });
 });
