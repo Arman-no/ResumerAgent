@@ -46,10 +46,22 @@ const CLOSE_ICON = `
   </svg>
 `;
 const SPINNER_ICON = `<span class="btn-icon-spinner"></span>`;
+// Copy is the universal fallback for the terminal-spawn path, which can't
+// be made to work on every OS/terminal emulator — so unlike Pause/Close/
+// Purge above, this icon has no color modifier and no disabled state: it
+// must render on every row, including ones where Resume/Attach itself is
+// disabled (live, superseded, status-unknown).
+const COPY_ICON = `
+  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="8" y="8" width="12" height="12" rx="1.5" />
+    <path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" />
+  </svg>
+`;
 
 const DELETE_LABEL = 'Delete session';
 const PAUSE_LABEL = 'Pause session';
 const CLOSE_LABEL = 'Close session';
+const COPY_LABEL = 'Copy resume command';
 const CONFIRM_LABEL = 'Click again to confirm';
 
 // Sessions as last returned by the server — filters below never re-fetch,
@@ -590,6 +602,7 @@ function renderRow(row, session, sessionsById) {
       <button class="btn ${actionClass}" data-action="resume" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>
         ${label}
       </button>
+      <button class="icon-btn" data-action="copy" title="${COPY_LABEL}" aria-label="${COPY_LABEL}">${COPY_ICON}</button>
       ${canPause ? `<button class="icon-btn icon-btn-pause" data-action="pause" title="${PAUSE_LABEL}" aria-label="${PAUSE_LABEL}">${PAUSE_ICON}</button>` : ''}
       ${canClose ? `<button class="icon-btn icon-btn-close" data-action="close" title="${CLOSE_LABEL}" aria-label="${CLOSE_LABEL}">${CLOSE_ICON}</button>` : ''}
       ${canPurge ? `<button class="icon-btn icon-btn-danger" data-action="purge" title="${DELETE_LABEL}" aria-label="${DELETE_LABEL}">${TRASH_ICON}</button>` : ''}
@@ -598,6 +611,7 @@ function renderRow(row, session, sessionsById) {
   if (!disabled) {
     row.querySelector('[data-action="resume"]').addEventListener('click', () => resumeSession(session, row));
   }
+  row.querySelector('[data-action="copy"]').addEventListener('click', (event) => copyResumeCommand(session, event.currentTarget));
   if (canPause) {
     row.querySelector('[data-action="pause"]').addEventListener('click', (event) => handlePauseClick(session, event.currentTarget));
   }
@@ -654,6 +668,49 @@ function showToast(message) {
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 3000);
+}
+
+// The universal fallback for the terminal-spawn path (see app header
+// comment): served over http://127.0.0.1, where navigator.clipboard
+// normally works, but it must not be assumed — a non-secure context or a
+// user gesture edge case can still leave it undefined or make it reject.
+// resumeCommand comes from the server once the parallel API-payload change
+// lands; until then (and for any session it's missing on) this falls back
+// to the plain CLI invocation every session supports.
+async function copyResumeCommand(session, button) {
+  const text = session.resumeCommand || `claude --resume ${session.sessionId}`;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    if (!legacyCopyToClipboard(text)) {
+      showToast('Could not copy — no clipboard access in this browser');
+      button.classList.add('shake');
+      button.addEventListener('animationend', () => button.classList.remove('shake'), { once: true });
+      return;
+    }
+  }
+  showToast(`Copied resume command for ${session.name}`);
+}
+
+// document.execCommand('copy') is deprecated but still the only fallback
+// when the async Clipboard API is missing or refuses (e.g. no secure
+// context) — an offscreen textarea is the standard workaround.
+function legacyCopyToClipboard(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(textarea);
+  return ok;
 }
 
 // Only sessionId is sent — the server resolves cwd/live/kind/id itself
