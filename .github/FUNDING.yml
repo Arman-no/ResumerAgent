@@ -1,4 +1,3 @@
-# Puts a "Sponsor" button on the repo page. It only appears once GitHub
-# Sponsors is actually enabled for this account at github.com/sponsors —
-# until then GitHub ignores this file.
+# Puts a "Sponsor" button at the top of the repo page. GitHub Sponsors is
+# enabled and the listing is public, so this is live.
 github: [Arman-no]
