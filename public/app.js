@@ -285,39 +285,48 @@ function costContextLineHtml(session) {
   return `<div class="activity-line">${items.join('')}</div>`;
 }
 
-// Rate-limit numbers only ever show up when the optional statusline
-// sidecar (lib/activitySidecar.mjs) has written one for this session —
-// most installs won't have one (see activityStripHtml's placeholder for
-// that case). Account-wide, not per-session — every session with a
-// sidecar should show the same percentage, which is expected, not a bug
-// (see the design doc's note on why these aren't additive across
-// sessions) — but sidecars refresh independently per session, so two
-// sessions can legitimately disagree by however much account usage moved
-// between their last refreshes. Design-review pass caught exactly that in
-// real data (5h% ranged 1%-11% across sessions with no explanation), so
-// the reading now carries its own "as of" freshness alongside the number,
-// same idea as relativeTime() elsewhere on the row, rather than presenting
-// every sidecar's number as equally current.
+// Mirrors this user's own statusline footer exactly (~/.claude/statusline.ps1
+// Bar + RateLimitSegment): "Usage #--------- 19% (resets in 3h 36m) | Week
+// #####----- 52% (resets in 2d 4h)". The earlier "Rate limit — 5h: 17% · 7d:
+// 52% (as of 13m ago)" line read as confusing next to the footer the user
+// actually watches. "resets in" counts down from resets_at against now, not
+// the sidecar's write time, so a stale sidecar still shows the right reset.
+function textBar(pct, width = 10) {
+  const p = Math.max(0, Math.min(100, Math.trunc(pct)));
+  const filled = Math.floor((p * width) / 100);
+  return '#'.repeat(filled) + '-'.repeat(width - filled);
+}
+
+function resetsIn(resetsAtSec) {
+  const secsLeft = Math.max(0, resetsAtSec - Math.floor(Date.now() / 1000));
+  const totalHours = Math.floor(secsLeft / 3600);
+  if (totalHours >= 24) return `${Math.floor(totalHours / 24)}d ${totalHours % 24}h`;
+  return `${totalHours}h ${Math.floor((secsLeft % 3600) / 60)}m`;
+}
+
+function rateLimitSegmentHtml(label, win, sep = '') {
+  if (typeof win?.used_percentage !== 'number') return '';
+  const pct = Math.round(win.used_percentage);
+  // A window whose reset time has already passed carries a pre-reset
+  // percentage; say so instead of showing "resets in 0h 0m" beside a stale number.
+  const reset = typeof win.resets_at !== 'number'
+    ? ''
+    : win.resets_at * 1000 <= Date.now()
+      ? ' <span class="activity-freshness">(reset since last update)</span>'
+      : ` <span class="activity-freshness">(resets in ${resetsIn(win.resets_at)})</span>`;
+  return `<span class="rate-seg">${sep}<span class="rate-value rate-${usageBand(pct)}">${label} <span class="rate-bar">${textBar(pct)}</span> ${pct}%</span>${reset}</span>`;
+}
+
 function rateLimitLineHtml(session) {
   const rl = session.rateLimits;
-  const items = [];
-  if (typeof rl?.five_hour?.used_percentage === 'number') {
-    items.push(`<span class="rate-value rate-${usageBand(rl.five_hour.used_percentage)}">5h: ${Math.round(rl.five_hour.used_percentage)}%</span>`);
-  }
-  if (typeof rl?.seven_day?.used_percentage === 'number') {
-    items.push(`<span class="rate-value rate-${usageBand(rl.seven_day.used_percentage)}">7d: ${Math.round(rl.seven_day.used_percentage)}%</span>`);
-  }
+  const items = [
+    rateLimitSegmentHtml('Usage', rl?.five_hour),
+    // The "|" leads the Week segment rather than trailing Usage, so a narrow
+    // card that wraps them onto two lines never leaves a dangling separator.
+    rateLimitSegmentHtml('Week', rl?.seven_day, typeof rl?.five_hour?.used_percentage === 'number' ? '<span class="rate-sep">|</span>' : ''),
+  ].filter(Boolean);
   if (items.length === 0) return '';
-  // Not .muted — that class also bumps font-size to 13px (sized for the
-  // 13px-context row-sub line it was written for), which would make this
-  // note the one oversized thing in an otherwise uniform 12px strip.
-  const freshness = typeof session.rateLimitsUpdatedAt === 'number'
-    ? ` <span class="activity-freshness">(as of ${relativeTime(session.rateLimitsUpdatedAt)})</span>`
-    : '';
-  // Labeled explicitly ("Rate limit —") rather than left as bare "5h 6% ·
-  // 7d 6%" — on its own that read as an unexplained stat with no indication
-  // it's Claude plan usage rather than, say, session progress or disk use.
-  return `<div class="activity-line"><span class="activity-item" title="Your Claude plan's rolling rate-limit usage (account-wide, from the statusline sidecar) — not a per-session number, and only as fresh as that sidecar's last write">Rate limit — ${items.join(' · ')}</span>${freshness}</div>`;
+  return `<div class="activity-line"><span class="activity-item rate-line" title="Your Claude plan's rate-limit usage (account-wide, from the statusline sidecar): Usage is the 5-hour window, Week the 7-day window">${items.join('')}</span></div>`;
 }
 
 // Groups cost/context/rate-limits into one small labeled, visually boxed
