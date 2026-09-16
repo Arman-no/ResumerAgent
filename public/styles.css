@@ -600,30 +600,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .context-yellow { background: var(--warning); }
 .context-red { background: var(--critical); }
 
-/* Same success/warning/critical bands as the context bar above, for the
-   rate-limit percentages (same thresholds — usageBand() in app.js). Status
-   color is carried by a small dot, not the number's own text color: design-
-   audit found light-theme success/warning against this strip's surface-2
-   background measure 3.0-3.2:1, short of WCAG's 4.5:1 — the same fix
-   applied to the status pills above. Critical (4.94-4.79:1) would have
-   passed on its own, but a consistent rule beats a conditional one here. */
-.rate-value {
-  color: var(--text);
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.rate-value::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.rate-value.rate-green::before { background: var(--success); }
-.rate-value.rate-yellow::before { background: var(--warning); }
-.rate-value.rate-red::before { background: var(--critical); }
-.rate-bar { font-family: var(--font-mono); letter-spacing: 0.02em; }
+.rate-value { color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
 .rate-sep { color: var(--text-muted); }
 .rate-line { flex-wrap: wrap; column-gap: 6px; row-gap: 2px; }
 .rate-seg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
