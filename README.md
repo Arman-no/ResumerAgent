@@ -41,9 +41,9 @@ follow directly, including the machine-specific gotchas (AppLocker,
 `SESSIONS_ROOT` detection) already hit once on the original dev machine.
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="Demo: the ResumerAgent dashboard listing live and dead Claude Code sessions, narrowing the Status filter to the live ones, copying a session's resume command to the clipboard, and switching between the dark and light themes" width="100%" />
+  <img src="docs/images/demo.gif" alt="Demo: clicking Resume on a session in the ResumerAgent dashboard opens a real terminal window, where Claude Code restores that conversation. Folder paths and account figures are blurred." width="100%" />
   <br />
-  <em>Narrowing to the live sessions, copying a resume command to the clipboard, and switching themes.</em>
+  <em>Click Resume: a real terminal opens and Claude Code picks the conversation back up. Paths and account figures blurred.</em>
 </p>
 
 ## The problem
