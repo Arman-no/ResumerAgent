@@ -1,0 +1,33 @@
+name: tests
+
+on:
+  push:
+    branches: [master, development]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # The whole point of this matrix is finding out which platform breaks,
+      # so one failing job must not cancel the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # 18 is the floor package.json claims; 22 is current. If 18 fails,
+        # the engines field is wrong and should move, not this matrix.
+        node: [18, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step on purpose: this project has zero runtime and zero
+      # dev dependencies, and the test runner ships with Node.
+      #
+      # `node --test` with no path argument discovers the test files itself.
+      # A `lib/*.test.mjs` glob would not survive the Windows runner, whose
+      # default shell does not expand it.
+      - run: node --test

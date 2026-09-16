@@ -11,6 +11,7 @@ import { readLiveAgents } from './lib/liveAgents.mjs';
 import { readTranscriptPreview, readTranscriptPreviewFromFile } from './lib/transcriptPreview.mjs';
 import { mergeSessions } from './lib/mergeSessions.mjs';
 import { buildResumeCommand } from './lib/resumeCommand.mjs';
+import { resolveTerminalCommand } from './lib/terminalCommand.mjs';
 import { purgeSessionFiles } from './lib/purgeSession.mjs';
 import { pauseBackgroundSession } from './lib/pauseSession.mjs';
 import { closeInteractiveSession } from './lib/closeSession.mjs';
@@ -87,6 +88,14 @@ async function getSessionsWithLiveStatus() {
     const sidecar = readActivitySidecar(config.sessionsRoot, session.sessionId);
     return {
       ...session,
+      // Same helper handleResume() calls to build the command it actually
+      // spawns — exposed here plain so the Copy button can offer the exact
+      // same string without this module duplicating buildResumeCommand's logic.
+      resumeCommand: buildResumeCommand({
+        session,
+        resumeTemplate: config.resumeCommand,
+        attachTemplate: config.attachCommand,
+      }),
       daysUntilExpiry: computeDaysUntilExpiry(session.updatedAt, config.cleanupPeriodDays),
       costUsd: sidecar?.cost?.total_cost_usd ?? session.costUsd,
       contextUsedPercent: sidecar?.context_window?.used_percentage ?? session.contextUsedPercent,
@@ -261,16 +270,28 @@ async function handleResume(req, res) {
     });
 
     const title = sanitizeTitle(session);
-    // Built as one pre-assembled line and handed to shell:true as a single
-    // string (no separate args array) rather than an argv array — Node has
-    // no reliable way to escape an argv array through three nested layers
-    // of cmd.exe parsing (this spawn -> `start` -> the nested `cmd /k`),
-    // which is exactly what produced a real "filename, directory name, or
-    // volume label syntax is incorrect" failure. The working directory is
-    // set via `cwd` below rather than a `cd /d` prefix in the command
-    // string, for the same reason — see the comment in lib/config.mjs.
-    const fullLine = `start "${title}" cmd /k "${command}"`;
-    const child = spawn(fullLine, {
+    // resolveTerminalCommand (lib/terminalCommand.mjs) is a pure function
+    // that picks the right shell line for this OS — see its own comments
+    // for why each platform's quoting looks the way it does, including the
+    // Windows nested `start` -> `cmd /k` cmd.exe parsing this spawn call
+    // used to build inline.
+    const line = resolveTerminalCommand({
+      platform: process.platform,
+      command,
+      title,
+      cwd: session.cwd,
+      override: config.terminalCommand,
+    });
+
+    if (!line) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: 'No terminal emulator found for this OS. Set TERMINAL_COMMAND in .env, or use the Copy button to run the command yourself.',
+      }));
+      return;
+    }
+
+    const child = spawn(line, {
       cwd: session.cwd,
       shell: true,
       detached: true,
@@ -604,10 +625,18 @@ server.on('error', (err) => {
   process.exit(1);
 });
 
+// No portable "open this URL" command exists: Windows goes through cmd's
+// `start`, macOS has `open`, most Linux desktops have `xdg-open`.
+function openBrowserCommand(url) {
+  if (process.platform === 'win32') return `cmd /c start "" "${url}"`;
+  if (process.platform === 'darwin') return `open "${url}"`;
+  return `xdg-open "${url}"`;
+}
+
 server.listen(config.port, '127.0.0.1', () => {
   const url = `http://127.0.0.1:${config.port}`;
   console.log(`ResumerAgent dashboard: ${url}`);
-  exec(`cmd /c start "" "${url}"`, (err) => {
+  exec(openBrowserCommand(url), (err) => {
     if (err) console.error('Failed to open browser:', err);
   });
 });

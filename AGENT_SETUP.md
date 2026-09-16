@@ -7,10 +7,11 @@ instead of asking the user what to do first.
 
 ## What this is
 
-A local Windows dashboard that finds and resumes dead/live Claude Code CLI
-sessions — plus a per-session expiry warning and an activity/observability
-panel (cost, context-window %, optional rate limits) and a dark/light
-themed UI. Branch `master` is feature-complete — do not work from any
+A local dashboard, cross-platform (Windows, macOS, Linux), that finds and
+resumes dead/live Claude Code CLI sessions — plus a per-session expiry
+warning and an activity/observability panel (cost, context-window %,
+optional rate limits) and a dark/light themed UI. Branch `master` is
+feature-complete — do not work from any
 other branch unless the user tells you to. Don't re-derive any of that
 from first principles: `docs/*-design.md` has the design history and final
 shipped state per feature, and `MASTER.md` at the repo root is the design
@@ -20,9 +21,23 @@ first.**
 
 ## Prerequisites — check before you install
 
-1. **Windows.** Run `ver` or check `$OS`/`process.platform`. If this is
-   macOS/Linux, stop and tell the user: Resume/Attach hardcode `cmd.exe`, this
-   tool does not work there as-is.
+1. **Platform.** Run `ver`/check `$OS` (Windows), `uname` (macOS/Linux), or
+   `process.platform`. All three are supported — Resume/Attach spawn a
+   terminal appropriate to the OS: `cmd.exe`/`start` on Windows,
+   Terminal.app via `osascript` on macOS, the first installed emulator
+   among `x-terminal-emulator`, `gnome-terminal`, `konsole`,
+   `xfce4-terminal`, `alacritty`, `kitty`, `xterm` on Linux (see
+   `lib/terminalCommand.mjs`). If you're on Linux and none of those are
+   installed, or the user wants a specific terminal (iTerm, WezTerm, Warp,
+   tmux, ...) on any OS, set `TERMINAL_COMMAND` in `.env` (see
+   `.env.example`) — tell the user about this rather than letting
+   Resume/Attach silently fail. Every session row also has a copy button
+   that puts the resume command on the clipboard regardless of terminal
+   support, so a missing terminal is never a hard blocker.
+   **Tell the user this caveat plainly:** the Windows path is exercised on
+   real hardware; macOS and Linux are covered by unit tests with the
+   platform and PATH probe injected, not yet run on real machines — if
+   something looks off there, it's plausibly a real gap, not user error.
 2. **Node.js 18+.** Run `node --version`. If missing or too old, tell the user
    to install Node — do not try to install Node yourself via a package
    manager that might not be permitted on their machine (see AppLocker note
@@ -48,11 +63,12 @@ throughout if that's the user's package manager):
 
 ```
 npm install
-copy .env.example .env
+cp .env.example .env
 npm start
 ```
 
-(`copy` is Windows `cmd.exe`; use `cp` if you're in a bash-like shell instead.)
+(`cp` works in any POSIX-ish shell, including Git Bash on Windows; in a
+plain Windows `cmd.exe` use `copy` instead.)
 
 This starts the server at `http://127.0.0.1:4317` and opens it in the
 default browser. If nothing opens automatically, open that URL yourself and
@@ -91,6 +107,7 @@ runs the identical underlying script. Two independent reasons, both real:
 | Resumed session's terminal shows the wrong session name entirely, or an unrelated Claude session's name changes | Environment-variable identity leak into the spawned process, OR (rarer, see hard rule below) process-ancestry contamination | Confirm `lib/cleanEnv.mjs` is being used by every `spawn`/`exec` call in `server.mjs` and `lib/liveAgents.mjs` — it should already be wired in on `master`. If you changed something and this regressed, that's the file to check first. If it's not an env issue, see the hard rule below before doing anything else. |
 | Dashboard loads, lists sessions, but every row is stuck "Status unknown" with every button disabled | `readLiveAgents()` (`lib/liveAgents.mjs`) failed. A warning banner above the stat cards shows the CLI's own first line of error output (the server console logs the full error). Causes seen on a real machine so far: a timeout (`claude agents --json --all` cost scales with tracked-session count, measured 2.2–6.3s with ~8–11 sessions, which is why its timeout is 15s, not 5s — don't raise it further without checking whether something is actually hanging), and on 2026-09-16 a Claude Code auto-update that recorded "success" but left a 500-byte placeholder at `bin\claude.exe` — Windows refuses to run it ("not compatible with the version of Windows you're running"; Git Bash prints "claude native binary not installed"). Other possibilities: `claude` missing from PATH, a CLI too old for `agents --json --all`, EDR/AppLocker blocking `claude`. | Read the banner, then run `claude --version` and `claude agents --json --all` in the same shell the server runs in — whatever that fails with is the real cause; fix that, don't touch the merge/safety logic. For the placeholder-binary case, run Claude Code's own postinstall: `node "%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\install.cjs"`. It swaps in the real binary without affecting already-running sessions, and the dashboard recovers on its next poll with no restart. |
 | Resume opens nothing, but the dashboard still says it succeeded | Older code returned `ok:true` before confirming the spawn actually started, so a blocked `cmd.exe`/`start` (AppLocker/EDR refusing process creation) looked like success. `master` now waits briefly for the spawn's own error event before responding. | If you still see this, check the server console for "Failed to spawn resume terminal" — that's the real error the UI should now also be surfacing. |
+| Resume does nothing / no terminal opens, on macOS or Linux | `lib/terminalCommand.mjs` couldn't find a terminal to drive. On Linux it only tries `x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`, `alacritty`, `kitty`, `xterm`, in that order — none installed means it returns `null` and the API responds with an actionable error instead of silently doing nothing. This path is also unit-tested only (platform and PATH probe injected), not yet run on real macOS/Linux hardware, so a genuine gap is plausible, not just a missing emulator. | Set `TERMINAL_COMMAND` in `.env` to whatever actually opens a terminal on this machine (iTerm, WezTerm, Warp, tmux, a specific emulator — see `.env.example` for the `{command}`/`{title}`/`{cwd}` placeholder syntax). Or skip the terminal spawn entirely: every session row has a copy button that puts the resume command on the clipboard — paste it into whatever terminal is already open. |
 | A session row's activity strip never shows rate-limit numbers (5h/7d), even though cost/context data appears fine | Not a bug. Rate limits have no transcript representation at all — they come exclusively from an optional statusline-sidecar file (`lib/activitySidecar.mjs`, `<SESSIONS_ROOT>/activity/<sessionId>.json`), written by the user's own statusline script. Most installs don't have one configured. | Confirm with the user whether they have a statusline sidecar writer set up. If not, this is expected — don't add a transcript-parsing workaround for rate limits, `docs/2026-09-12-activity-observability-design.md` already confirmed there's no such data to parse. |
 | A live session never shows a Pause button, even though it's clearly running | Not a bug. Pause only exists for a **background** job (`claude --bg`, has a stoppable `id`) — an interactive session is a terminal someone has open, and Claude Code has no external stop surface for that at all (confirmed via `claude --help`: `stop|kill <id>` only ever documents a background session). | Check `kind` in `/api/sessions` for that session. If it's `interactive`, this is expected — don't add a kill-by-PID fallback for it, see `docs/2026-09-13-pause-session-design.md` for why that was rejected. |
 | After a Pause succeeds, `claude agents --json --all` still lists the session (now with a `state` key) and it briefly looked "live" on the dashboard | Fixed on `master` (`lib/mergeSessions.mjs`) — a terminal-state entry (`state` present at all: observed values include `done` and `failed`) is now excluded from the live set outright, not just deprioritized against a live companion entry. If you see this again, the regression is almost certainly a change to that filter. | Run the two `mergeSessions.test.mjs` cases for `done`/`failed`-only entries before touching this file again; don't re-add a check for one specific `state` string, the fix is deliberately "any `state` key at all," since the CLI's exact terminal-state vocabulary isn't fully documented. |
