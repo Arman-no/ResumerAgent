@@ -82,10 +82,9 @@ ResumerAgent today answers "which sessions exist and can I get back into
 one" — a static/point-in-time view. It doesn't answer "what is happening
 right now across my agents" — token usage, whether a session is near its
 rate limit, how much a session has cost so far, or what it's actively
-doing. For someone running several named sessions in parallel (this user's
-actual pattern: Session A, Session B, Session C, Session D,
-Trade), that's exactly the kind of at-a-glance status a second monitor tab
-would be useful for.
+doing. For someone running several named sessions in parallel across
+different projects, that's exactly the kind of at-a-glance status a second
+monitor tab would be useful for.
 
 ## What's already available, and where
 
