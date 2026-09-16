@@ -9,6 +9,13 @@ Claude Code already has `claude agents`, a terminal dashboard for every
 doesn't: dead interactive sessions, shown alongside the live ones, in a
 browser, with one click to reopen a terminal on the right one.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+  <img alt="The ResumerAgent dashboard: live and resumable Claude Code sessions side by side, each with its last message, cost, context-window use, and an expiry warning on the one about to be cleaned up" src="docs/images/dashboard-light.png">
+</picture>
+
+*Example sessions — the screenshot is generated from seeded data, not a real machine.*
+
 **Handing this to a colleague, or to a Claude Code agent on another
 machine?** Point them at `AGENT_SETUP.md` instead of this file — it's written
 as install + self-troubleshooting instructions for an agent to follow
