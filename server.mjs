@@ -27,6 +27,7 @@ const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
 };
 
 const MAX_BODY_BYTES = 10 * 1024;
