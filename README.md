@@ -379,13 +379,23 @@ back a session you thought was gone, you can support the work here:
 
 ## Author
 
-Built by **Arman Nouromid** — data engineer, building tools that keep AI
-coding sessions from disappearing.
+<h3 align="center">Arman Nouromid</h3>
 
 <p align="center">
-  <a href="https://armannouromid.com">Website</a> &middot;
-  <a href="https://github.com/Arman-no">GitHub</a> &middot;
-  <a href="https://www.linkedin.com/in/arman-nouromid/">LinkedIn</a>
+  <b>Senior Data Engineer &amp; DWH Architect</b><br/>
+  7 years modernizing business-critical data warehouses in insurance and finance.<br/>
+  Builds tools that keep AI coding sessions from disappearing.
+</p>
+
+<p align="center">
+  <a href="https://armannouromid.com"><img src="https://img.shields.io/badge/Website-armannouromid.com-0F1417?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIvPjxwYXRoIGQ9Ik0yIDEyaDIwTTEyIDJhMTUgMTUgMCAwIDEgMCAyME0xMiAyYTE1IDE1IDAgMCAwIDAgMjAiLz48L3N2Zz4%3D&logoColor=white" alt="Website" /></a>
+  <a href="https://www.linkedin.com/in/arman-nouromid/"><img src="https://img.shields.io/badge/LinkedIn-arman--nouromid-0A66C2?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0yMC40NDcgMjAuNDUyaC0zLjU1NHYtNS41NjljMC0xLjMyOC0uMDI3LTMuMDM3LTEuODUyLTMuMDM3LTEuODUzIDAtMi4xMzYgMS40NDUtMi4xMzYgMi45Mzl2NS42NjdIOS4zNTFWOWgzLjQxNHYxLjU2MWguMDQ2Yy40NzctLjkgMS42MzctMS44NSAzLjM3LTEuODUgMy42MDEgMCA0LjI2NyAyLjM3IDQuMjY3IDUuNDU1djYuMjg2ek01LjMzNyA3LjQzM2EyLjA2NCAyLjA2NCAwIDEgMSAwLTQuMTI4IDIuMDY0IDIuMDY0IDAgMCAxIDAgNC4xMjh6bTEuNzgyIDEzLjAxOUgzLjU1NVY5aDMuNTY0djExLjQ1MnpNMjIuMjI1IDBIMS43NzFDLjc5MiAwIDAgLjc3NCAwIDEuNzI5djIwLjU0MkMwIDIzLjIyNy43OTIgMjQgMS43NzEgMjRoMjAuNDUxQzIzLjIgMjQgMjQgMjMuMjI3IDI0IDIyLjI3MVYxLjcyOUMyNCAuNzc0IDIzLjIgMCAyMi4yMjIgMHoiLz48L3N2Zz4%3D&logoColor=white" alt="LinkedIn" /></a>
+  <a href="https://github.com/Arman-no"><img src="https://img.shields.io/badge/GitHub-Arman--no-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub" /></a>
+  <a href="https://github.com/sponsors/Arman-no"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?style=for-the-badge&logo=githubsponsors&logoColor=white" alt="Sponsor" /></a>
+</p>
+
+<p align="center">
+  <sub>More from the author: <a href="https://github.com/Arman-no/web-scraping-toolkit">web-scraping-toolkit</a> — fetch the pages an agent's built-in fetch comes back empty on.</sub>
 </p>
 
 ## License
