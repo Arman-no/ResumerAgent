@@ -19,6 +19,8 @@ import { envWithoutIdentity } from './lib/cleanEnv.mjs';
 import { computeDaysUntilExpiry } from './lib/expiry.mjs';
 import { readActivitySidecar } from './lib/activitySidecar.mjs';
 import { computeStatsSummary } from './lib/statsSummary.mjs';
+import { detectBillingMode } from './lib/billingMode.mjs';
+import { isSidecarStatuslineConfigured } from './lib/statuslineSetup.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -42,6 +44,19 @@ const DEFAULT_DISCOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SERVER_STARTED_AT = Date.now();
 
 const config = loadConfig();
+// Once at startup: tells the UI whether 5-hour/weekly limits can exist at all
+// (subscription) or never will (API billing). Only {mode, provider} leaves here.
+const BILLING = detectBillingMode({ sessionsRoot: config.sessionsRoot });
+
+// Read per request (tiny file) so `npm run setup-statusline` shows up in an
+// already-open dashboard without a restart.
+function statuslineConfigured() {
+  try {
+    return isSidecarStatuslineConfigured(JSON.parse(fs.readFileSync(path.join(config.sessionsRoot, 'settings.json'), 'utf8')));
+  } catch {
+    return false;
+  }
+}
 const ALLOWED_HOSTS = [`127.0.0.1:${config.port}`, `localhost:${config.port}`];
 
 // A session shouldn't silently drop out of the dashboard (discovery window)
@@ -547,7 +562,7 @@ const server = http.createServer(async (req, res) => {
       // sidebar filters happen to be narrowed to right now.
       const stats = computeStatsSummary(sessions);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions, stats, liveStatusError }));
+      res.end(JSON.stringify({ startedAt: SERVER_STARTED_AT, sessions, stats, liveStatusError, billing: BILLING, statusline: { configured: statuslineConfigured() } }));
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: String(err) }));
