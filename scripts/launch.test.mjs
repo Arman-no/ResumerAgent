@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {
   parseNetstatPid,
   parseLsofPids,
@@ -50,32 +51,26 @@ test('parseLsofPids takes the first pid line, null when empty', () => {
   assert.equal(parseLsofPids(null), null);
 });
 
-const REPO_ROOT = 'C:\\AE\\ResumerAgent';
-const SERVER_PATH = `${REPO_ROOT}\\server.mjs`;
+// Built with the running OS's own path rules: a `C:\...` literal is not
+// absolute on Linux/macOS, which made these pass or fail by accident there (CI).
+const SERVER_PATH = path.resolve(path.sep, 'opt', 'ResumerAgent', 'server.mjs');
+const OTHER_SERVER = path.resolve(path.sep, 'opt', 'OtherProject', 'server.mjs');
+const NODE = `"${process.execPath}"`;
 
 test('isOurServer accepts the bare relative "server.mjs" this script spawns itself with', () => {
-  assert.equal(
-    isOurServer('"C:\\Program Files\\nodejs\\node.exe" server.mjs', SERVER_PATH),
-    true
-  );
+  assert.equal(isOurServer(`${NODE} server.mjs`, SERVER_PATH), true);
 });
 
 test('isOurServer accepts an absolute path that resolves to this repo\'s server.mjs', () => {
-  assert.equal(
-    isOurServer('"C:\\Program Files\\nodejs\\node.exe" "C:\\AE\\ResumerAgent\\server.mjs"', SERVER_PATH),
-    true
-  );
+  assert.equal(isOurServer(`${NODE} "${SERVER_PATH}"`, SERVER_PATH), true);
 });
 
 test('isOurServer rejects an absolute path to a same-named server.mjs in a different project', () => {
-  assert.equal(
-    isOurServer('"C:\\Program Files\\nodejs\\node.exe" "C:\\Other\\Project\\server.mjs"', SERVER_PATH),
-    false
-  );
+  assert.equal(isOurServer(`${NODE} "${OTHER_SERVER}"`, SERVER_PATH), false);
 });
 
 test('isOurServer rejects an unrelated node process entirely', () => {
-  assert.equal(isOurServer('"C:\\Program Files\\nodejs\\node.exe" app.js', SERVER_PATH), false);
+  assert.equal(isOurServer(`${NODE} app.js`, SERVER_PATH), false);
 });
 
 test('isOurServer rejects a missing/unreadable command line', () => {
