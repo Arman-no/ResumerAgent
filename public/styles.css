@@ -548,42 +548,86 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   color: var(--accent-text);
 }
 
-/* Groups cost/context/rate-limits into their own small, visually set-apart
-   strip — surface-2 (one step up from the row's own surface background) is
-   what separates it from the file-metadata line (.row-sub: branch/size)
-   above, rather than everything reading as one undifferentiated run of
-   numbers. Fixed min-height covers both its own two-line case and the
-   single-line empty-state placeholder, so a card with no sidecar data yet
-   is the same height as one with full data instead of the list looking
-   jagged.
-   min-height measured against the real two-line render (49.3px, both lines
-   present + the 4px gap + 12px vertical padding), not assumed — the prior
-   42px only matched the shorter one-line placeholder case and let a
-   mixed list of full/placeholder cards visibly step by ~7px card to card,
-   which is exactly the jaggedness this rule says it prevents. */
+/* The activity box: a small two-sided table on surface-2 (one step up from
+   the row's own surface), set apart from the file-metadata line above it.
+   Left: this session's Cost and Context. Right, past a 1px divider: the
+   account's 5-hour and Weekly limits, plus one "as of" note for both.
+   Wide cards: 2 rows x 6 columns. Narrow cards (container < 600px): the
+   limits drop under as rows 3-4, so nothing ellipsizes on a real reading.
+   Rows are 18px and the no-data message spans both limit rows, so every
+   card at the same width has the same height whatever data it has
+   (a jagged list was the original complaint behind the old min-height). */
 .activity-strip {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-  min-height: 50px;
+  container-type: inline-size;
   margin: 4px 0 2px;
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
-.activity-line {
+.activity-table {
+  display: grid;
+  grid-template-columns: auto auto auto auto minmax(0, 1fr) auto;
+  grid-auto-rows: minmax(18px, auto);
+  align-items: center;
+  column-gap: 8px;
+  white-space: nowrap;
+}
+.at-row { display: contents; }
+.at-r1 > * { grid-row: 1; }
+.at-r2 > * { grid-row: 2; }
+.at-left > .at-label { grid-column: 1; }
+.at-left > .at-value { grid-column: 2; padding-right: 8px; }
+.at-right > .at-label { grid-column: 3; }
+.at-right > .at-value { grid-column: 4; }
+.at-right > .at-reset { grid-column: 5; }
+/* The divider: a 1px border on whatever starts column 3, label or message. */
+.at-right > .at-label,
+.at-message > * {
+  align-self: stretch;
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
 }
-.activity-line.muted { color: var(--text-muted); font-style: italic; }
-.activity-item { display: inline-flex; align-items: center; gap: 6px; }
-.activity-item.muted { color: var(--text-muted); font-style: italic; }
-.activity-freshness { color: var(--text-muted); }
+.at-message > * { grid-column: 3 / -1; grid-row: 1 / span 2; white-space: normal; color: var(--text-muted); }
+.at-fresh > * { grid-column: 6; grid-row: 1 / span 2; color: var(--text-muted); text-align: right; }
+
+.at-label { color: var(--text-muted); }
+.at-value { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.at-pct { min-width: 4ch; text-align: right; }
+.at-reset { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+/* "No data yet" placeholders read as placeholders; the API-billing message
+   is a fact, so it stays upright. */
+.at-missing,
+.at-message.at-missing > * { color: var(--text-muted); font-style: italic; }
+
+@container (max-width: 600px) {
+  .activity-table { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+  .at-right.at-r1 > * { grid-row: 3; }
+  .at-right.at-r2 > * { grid-row: 4; }
+  .at-left > .at-value { grid-column: 2 / -1; padding-right: 0; }
+  .at-right > .at-label { grid-column: 1; }
+  .at-right > .at-value { grid-column: 2; }
+  .at-right > .at-reset { grid-column: 3; }
+  .at-right > .at-label,
+  .at-message > * { padding-left: 0; border-left: none; }
+  .at-message > * { grid-column: 1 / -1; grid-row: 3 / span 2; }
+  /* API billing is machine-wide, so every card shows it: one line is enough. */
+  .at-message:not(.at-missing) > * { grid-row: 3; }
+  .at-fresh > * { grid-column: 4; grid-row: 3 / span 2; }
+  /* Rows 3-4 start with the limits: a hairline above them, not beside. */
+  .activity-table::before {
+    content: "";
+    grid-column: 1 / -1;
+    grid-row: 3;
+    align-self: start;
+    border-top: 1px solid var(--border);
+    margin-top: -1px;
+  }
+}
 
 .context-bar-track {
   width: 44px;
@@ -597,11 +641,6 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 .context-green { background: var(--success); }
 .context-yellow { background: var(--warning); }
 .context-red { background: var(--critical); }
-
-.rate-value { color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
-.rate-sep { color: var(--text-muted); }
-.rate-line { flex-wrap: wrap; column-gap: 6px; row-gap: 2px; }
-.rate-seg { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 
 .expiry-badge {
   color: var(--warning);

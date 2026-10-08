@@ -244,62 +244,57 @@ function expiryBadgeHtml(session) {
   return `<span class="expiry-badge ${urgent ? 'expiry-urgent' : ''}" title="Claude Code's own cleanup (cleanupPeriodDays) will delete this transcript soon unless it's touched again">⚠ ${escapeHtml(label)}</span>`;
 }
 
-// Cost + context share a line. No leading icon glyph — checked against
-// this app's own established convention for a line of small inline stats
-// (.row-sub: badge/branch/size, separated by "·", no icons) rather than
-// its separate convention for standalone action buttons (theme toggle,
-// refresh, purge — those *are* icon-only, but they're controls, not a
-// stats readout). The design-review pass flagged the previous 💰/📊
-// emoji as the one part of this strip that didn't fit either convention:
-// full-color OS glyphs in an app where every other icon is a hand-drawn
-// monochrome stroke SVG using currentColor, un-themeable and read aloud
-// by name ("money bag") ahead of the actual text by a screen reader.
-// Dropping them outright — not swapping in two new SVGs — is the smaller,
-// more consistent fix: it makes this line match row-sub's own plain-text
-// pattern exactly, rather than inventing a third icon convention.
-//
-// Both items always render, cost and context independently — previously
-// a missing contextUsedPercent (12 of 26 real sessions, 2026-10-08) made
-// the whole context box vanish rather than show "no data", and a session
-// with cost but no context silently lost the box instead of saying so.
-// Each missing value now gets its own muted "—" in the same shape, so the
-// box's presence/size never depends on which fields happen to be null.
-function costContextLineHtml(session) {
-  const hasCost = typeof session.costUsd === 'number';
-  const costText = hasCost ? `$${session.costUsd.toFixed(2)}` : '—';
-  const costItem = `<span class="activity-item${hasCost ? '' : ' muted'}" title="Total cost so far this session">${costText}</span>`;
+// The activity box is a small two-sided table: this session's own numbers
+// (Cost, Context) on the left, the account's rate limits (5-hour, Weekly)
+// on the right. Plain-text labels, no icon glyphs (same convention as
+// .row-sub). Every cell always renders — a missing value is a muted "—" —
+// so the box's height never depends on which fields happen to be null and
+// the list never looks jagged (12 of 26 real sessions had no context
+// reading on 2026-10-08). Layout (two rows wide, four rows on a narrow
+// card) lives in styles.css under .activity-table.
 
+// Set from each /api/sessions payload. null = an older server that doesn't
+// send it — treated like a subscription (the old wording).
+let billing = null;
+// Without the statusline sidecar, live sessions have no cost until Claude
+// Code writes one to the transcript, and limits never appear.
+let statuslineMissing = false;
+const SETUP_HINT = 'run npm run setup-statusline';
+
+function barHtml(pct) {
+  const band = usageBand(pct);
+  return `<span class="context-bar-track"><span class="context-bar-fill context-${band}" style="width:${Math.min(100, Math.max(0, pct))}%"></span></span><span class="at-pct">${Math.round(pct)}%</span>`;
+}
+
+function tableRowHtml(side, row, label, valueHtml, { title = '', muted = false, extraHtml = '' } = {}) {
+  return `<div class="at-row at-${side} at-r${row}" role="row"${title ? ` title="${escapeHtml(title)}"` : ''}>`
+    + `<span class="at-label" role="rowheader">${escapeHtml(label)}</span>`
+    + `<span class="at-value${muted ? ' at-missing' : ''}" role="cell">${valueHtml}</span>${extraHtml}</div>`;
+}
+
+function costContextRowsHtml(session) {
+  const hasCost = typeof session.costUsd === 'number';
   const hasContext = typeof session.contextUsedPercent === 'number';
-  // "/200k" dropped from the tooltip — no longer true for every session
-  // since lib/transcriptPreview.mjs now sizes the window per the
-  // session's own model (1M for current-gen models, 200k otherwise).
-  // The auto-compaction note answers the confusion a 100% reading
-  // actually caused in real use (captured verbatim in a real session's
-  // own preview text during this design pass: "why for some agents...
-  // is it shoing 100% ctx? it's unclear... better to have more
-  // clarity") — the number was in that case correct, just unexplained.
+  // Context is sized per the session's own model (1M or 200k, see
+  // lib/transcriptPreview.mjs); the compaction note answers the "why 100%?"
+  // confusion a correct-but-unexplained reading caused in real use.
   const contextTitle = hasContext
     ? "Approx. context window used, sized to this session's own model — Claude Code compacts automatically as this nears 100%"
     : 'No context-window reading yet for this session';
-  const fillWidth = hasContext ? Math.min(100, session.contextUsedPercent) : 0;
-  const fillClass = hasContext ? ` context-${usageBand(session.contextUsedPercent)}` : '';
-  const contextText = hasContext ? `${Math.round(session.contextUsedPercent)}% ctx` : '— ctx';
-  const contextItem = `
-    <span class="activity-item context-item${hasContext ? '' : ' muted'}" title="${contextTitle}">
-      <span class="context-bar-track"><span class="context-bar-fill${fillClass}" style="width:${fillWidth}%"></span></span>
-      ${contextText}
-    </span>
-  `;
-  return `<div class="activity-line">${costItem}${contextItem}</div>`;
+  return tableRowHtml('left', 1, 'Cost', hasCost ? escapeHtml(`$${session.costUsd.toFixed(2)}`) : '—', {
+    title: 'Total cost so far this session', muted: !hasCost,
+  }) + tableRowHtml('left', 2, 'Context', hasContext ? barHtml(session.contextUsedPercent) : '—', {
+    title: contextTitle, muted: !hasContext,
+  });
 }
 
-// Mirrors this user's own statusline footer (~/.claude/statusline.ps1
-// RateLimitSegment): "Usage [bar] 19% (resets in 3h 36m) | Week [bar] 52%
-// (resets in 2d 4h)", with the same progress bar as the context item
-// instead of the terminal's #/- text bar, so the strip reads as one component.
-// The earlier "Rate limit — 5h: 17% · 7d: 52% (as of 13m ago)" line read as
-// confusing next to the footer the user actually watches. "resets in" counts down from resets_at against now, not
-// the sidecar's write time, so a stale sidecar still shows the right reset.
+// en-GB on purpose: a 24-hour clock and "Mon" in this English UI,
+// regardless of the browser's own locale.
+const clockFmt = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
+const weekdayClockFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+// Counts down from resets_at against now, not the sidecar's write time, so
+// a stale sidecar still shows the right reset.
 function resetsIn(resetsAtSec) {
   const secsLeft = Math.max(0, resetsAtSec - Math.floor(Date.now() / 1000));
   const totalHours = Math.floor(secsLeft / 3600);
@@ -307,48 +302,45 @@ function resetsIn(resetsAtSec) {
   return `${totalHours}h ${Math.floor((secsLeft % 3600) / 60)}m`;
 }
 
-function rateLimitSegmentHtml(label, win, sep = '') {
-  if (typeof win?.used_percentage !== 'number') return '';
-  const pct = Math.round(win.used_percentage);
-  // A window whose reset time has already passed carries a pre-reset
-  // percentage; say so instead of showing "resets in 0h 0m" beside a stale number.
-  const reset = typeof win.resets_at !== 'number'
-    ? ''
-    : win.resets_at * 1000 <= Date.now()
-      ? ' <span class="activity-freshness">(reset since last update)</span>'
-      : ` <span class="activity-freshness">(resets in ${resetsIn(win.resets_at)})</span>`;
-  return `<span class="rate-seg">${sep}<span class="rate-value">${label} <span class="context-bar-track"><span class="context-bar-fill context-${usageBand(pct)}" style="width:${Math.min(100, pct)}%"></span></span> ${pct}%</span>${reset}</span>`;
+function resetText(resetsAtSec, fmt) {
+  if (typeof resetsAtSec !== 'number') return '';
+  // A window whose reset already passed carries a pre-reset percentage.
+  if (resetsAtSec * 1000 <= Date.now()) return 'reset since last update';
+  return `resets ${fmt.format(new Date(resetsAtSec * 1000)).replace(',', '')} · in ${resetsIn(resetsAtSec)}`;
 }
 
-function rateLimitLineHtml(session) {
+function limitRowHtml(row, label, win, fmt, title) {
+  const has = typeof win?.used_percentage === 'number';
+  const reset = has ? resetText(win.resets_at, fmt) : '';
+  return tableRowHtml('right', row, label, has ? barHtml(win.used_percentage) : '—', {
+    title, muted: !has, extraHtml: `<span class="at-reset" role="cell">${escapeHtml(reset)}</span>`,
+  });
+}
+
+function rateLimitRowsHtml(session) {
+  if (billing?.mode === 'api') {
+    const via = billing.provider ? ` via ${billing.provider}` : '';
+    return `<div class="at-row at-message" role="row"><span role="cell">${escapeHtml(`No 5-hour or weekly limits — billed per token${via}`)}</span></div>`;
+  }
   const rl = session.rateLimits;
-  const items = [
-    rateLimitSegmentHtml('Usage', rl?.five_hour),
-    // The "|" leads the Week segment rather than trailing Usage, so a narrow
-    // card that wraps them onto two lines never leaves a dangling separator.
-    rateLimitSegmentHtml('Week', rl?.seven_day, typeof rl?.five_hour?.used_percentage === 'number' ? '<span class="rate-sep">|</span>' : ''),
-  ].filter(Boolean);
-  if (items.length === 0) return '';
-  return `<div class="activity-line"><span class="activity-item rate-line" title="Your Claude plan's rate-limit usage (account-wide, from the statusline sidecar): Usage is the 5-hour window, Week the 7-day window">${items.join('')}</span></div>`;
+  const hasAny = typeof rl?.five_hour?.used_percentage === 'number' || typeof rl?.seven_day?.used_percentage === 'number';
+  if (!hasAny) {
+    const text = statuslineMissing
+      ? `No limit data — ${SETUP_HINT} to enable`
+      : "No limit data yet — appears once the session's statusline reports it";
+    return `<div class="at-row at-message at-missing" role="row"><span role="cell">${escapeHtml(text)}</span></div>`;
+  }
+  const updatedAt = session.rateLimitsUpdatedAt;
+  const freshness = updatedAt
+    ? `<div class="at-row at-fresh" role="row"><span role="cell" title="${escapeHtml(`Rate limits last reported ${new Date(updatedAt).toLocaleString()}`)}">${escapeHtml(`as of ${relativeTime(updatedAt)}`)}</span></div>`
+    : '';
+  return limitRowHtml(1, '5-hour', rl.five_hour, clockFmt, "Your Claude plan's 5-hour session limit (account-wide)")
+    + limitRowHtml(2, 'Weekly', rl.seven_day, weekdayClockFmt, "Your Claude plan's weekly limit (account-wide)")
+    + freshness;
 }
 
-// Groups cost/context/rate-limits into one small labeled, visually boxed
-// strip (border + background, set apart from the row-sub file-metadata
-// line above it) instead of scattering bare numbers next to git
-// branch/file size. Every card gets this same box regardless of whether
-// the data exists yet — a session with no statusline sidecar (most of
-// them, right now: sidecars only exist for sessions active since this
-// user wired up their statusline) still renders the same two-line shape,
-// just with a dimmed placeholder in place of what's missing, so card
-// heights stay consistent across the whole list rather than jagged
-// depending on which sessions happen to have data. costContextLineHtml
-// always returns a line now (cost and context each fall back to their
-// own "—" placeholder), so only the rate-limit line still needs one here.
 function activityStripHtml(session) {
-  const costContextLine = costContextLineHtml(session);
-  const rateLine = rateLimitLineHtml(session);
-  const ratePlaceholder = `<div class="activity-line muted" title="Rate limits come from this user's own statusline sidecar — none written for this session yet">no rate-limit data yet</div>`;
-  return `<div class="activity-strip">${costContextLine}${rateLine || ratePlaceholder}</div>`;
+  return `<div class="activity-strip"><div class="activity-table" role="table" aria-label="Cost, context and rate limits">${costContextRowsHtml(session)}${rateLimitRowsHtml(session)}</div></div>`;
 }
 
 function escapeHtml(str) {
@@ -417,7 +409,10 @@ function renderStats(stats) {
   if (!stats) return;
   const costLabel = stats.totalCostUsd == null ? '—' : `$${stats.totalCostUsd.toFixed(2)}`;
   const contextLabel = stats.avgContextUsedPercent == null ? '—' : `${Math.round(stats.avgContextUsedPercent)}%`;
-  const costNote = partialCoverageNote(stats.totalCostSessionCount, stats.sessionsTracked);
+  const coverage = partialCoverageNote(stats.totalCostSessionCount, stats.sessionsTracked);
+  const costNote = statuslineMissing
+    ? [coverage, `live costs: ${SETUP_HINT}`].filter(Boolean).join(' · ')
+    : coverage;
   const contextNote = partialCoverageNote(stats.avgContextSessionCount, stats.sessionsTracked);
   statCardsEl.innerHTML = [
     statCardHtml({
@@ -1109,6 +1104,9 @@ async function loadSessions() {
       showUpdateBanner();
     }
     rawSessions = payload.sessions;
+    billing = payload.billing ?? null;
+    // false only when the server says so; an older server sends nothing.
+    statuslineMissing = payload.statusline?.configured === false;
     renderStats(payload.stats);
     const liveStatusBannerEl = document.getElementById('live-status-banner');
     liveStatusBannerEl.classList.toggle('hidden', !payload.liveStatusError);
@@ -1252,9 +1250,32 @@ syncThemeButton();
 // the next automatic one back out to a full POLL_INTERVAL_MS away, instead
 // of an unrelated interval tick landing seconds later — the whole point of
 // a manual refresh button once the interval is minutes long, not seconds.
-async function pollAndReschedule() {
-  await loadSessions();
-  pollTimer = setTimeout(pollAndReschedule, POLL_INTERVAL_MS);
+// Never two loads at once: a refresh requested while one is in flight
+// (double-click on Refresh, or the post-pause/close refetch landing mid-poll)
+// queues exactly one follow-up instead of overlapping it, so a single load
+// owns the spinner and the next timer, and post-action state isn't missed.
+let inFlightPoll = null;
+let pollAgain = false;
+function pollAndReschedule() {
+  if (inFlightPoll) {
+    pollAgain = true;
+    return inFlightPoll;
+  }
+  inFlightPoll = (async () => {
+    try {
+      await loadSessions();
+    } finally {
+      inFlightPoll = null;
+      clearTimeout(pollTimer);
+      if (pollAgain) {
+        pollAgain = false;
+        pollAndReschedule();
+      } else {
+        pollTimer = setTimeout(pollAndReschedule, POLL_INTERVAL_MS);
+      }
+    }
+  })();
+  return inFlightPoll;
 }
 
 function refreshNow() {

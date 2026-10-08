@@ -150,6 +150,34 @@ Each session row also gets a small activity strip:
   rate-limit data. The sidecar is entirely optional — most installs won't
   have one, and the dashboard degrades gracefully without it.
 
+`scripts/statusline-sidecar.mjs` is a ready-made writer for that sidecar, so
+you don't have to hand-roll a `statusline.ps1`. Install it with:
+
+```
+npm run setup-statusline
+```
+
+This edits `settings.json` for you — resolving the same config directory
+Claude Code itself uses (`CLAUDE_CONFIG_DIR`, else `~/.claude`) — and keeps a
+one-time backup (`settings.json.bak-resumeragent`) before its first change.
+If you already have a statusline configured, it's kept: your command still
+runs, chained behind the sidecar, so you get both. Already set up? It says so
+and does nothing. `npm run setup-statusline -- --status` reports the current
+state without changing anything; `npm run setup-statusline -- --remove`
+undoes it, restoring your original statusline exactly (or removing the key
+if you had none). All of this is idempotent and takes effect immediately —
+Claude Code picks up the new statusline on its next message, no restart
+needed.
+
+The script itself prints a short status line (e.g. `Opus 5.5 · ctx 4% ·
+$821.94 · 5h 19% (resets 3h 36m)`) and, as a side effect, writes the sidecar
+file this dashboard reads. Rate limits are only ever present for Claude.ai
+subscription plans — on API/Bedrock/Vertex/Foundry billing they're simply
+absent from Claude Code's status line payload, so the script omits them from
+both the printed line and the sidecar rather than showing a stale or fake
+number; you still get live cost and context-window usage either way. Like
+the sidecar it writes, this script is entirely optional.
+
 ## Screenshots
 
 <picture>
