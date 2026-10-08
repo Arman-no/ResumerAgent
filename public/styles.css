@@ -359,6 +359,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   line-height: 1.1;
   color: var(--text);
 }
+.stat-note { font-size: 11px; color: var(--text-muted); }
 .stat-sparkline { display: block; margin-top: var(--space-4); }
 .sparkline-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .sparkline-area { fill: var(--accent-soft); stroke: none; }
@@ -573,10 +574,6 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
   background: var(--surface-2);
   font-size: 12px;
 }
-.activity-strip.is-empty {
-  color: var(--text-muted);
-  font-style: italic;
-}
 .activity-line {
   display: flex;
   align-items: center;
@@ -585,6 +582,7 @@ main#content { flex: 1; padding: 24px 28px; min-width: 0; }
 }
 .activity-line.muted { color: var(--text-muted); font-style: italic; }
 .activity-item { display: inline-flex; align-items: center; gap: 6px; }
+.activity-item.muted { color: var(--text-muted); font-style: italic; }
 .activity-freshness { color: var(--text-muted); }
 
 .context-bar-track {

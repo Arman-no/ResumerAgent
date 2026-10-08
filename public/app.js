@@ -257,32 +257,40 @@ function expiryBadgeHtml(session) {
 // Dropping them outright — not swapping in two new SVGs — is the smaller,
 // more consistent fix: it makes this line match row-sub's own plain-text
 // pattern exactly, rather than inventing a third icon convention.
-// Returns '' when neither is available, so the caller can fall back to a
-// placeholder instead of rendering an empty line.
+//
+// Both items always render, cost and context independently — previously
+// a missing contextUsedPercent (12 of 26 real sessions, 2026-10-08) made
+// the whole context box vanish rather than show "no data", and a session
+// with cost but no context silently lost the box instead of saying so.
+// Each missing value now gets its own muted "—" in the same shape, so the
+// box's presence/size never depends on which fields happen to be null.
 function costContextLineHtml(session) {
-  const items = [];
-  if (typeof session.costUsd === 'number') {
-    items.push(`<span class="activity-item" title="Total cost so far this session">$${session.costUsd.toFixed(2)}</span>`);
-  }
-  if (typeof session.contextUsedPercent === 'number') {
-    const pct = Math.round(session.contextUsedPercent);
-    // "/200k" dropped from the tooltip — no longer true for every session
-    // since lib/transcriptPreview.mjs now sizes the window per the
-    // session's own model (1M for current-gen models, 200k otherwise).
-    // The auto-compaction note answers the confusion a 100% reading
-    // actually caused in real use (captured verbatim in a real session's
-    // own preview text during this design pass: "why for some agents...
-    // is it shoing 100% ctx? it's unclear... better to have more
-    // clarity") — the number was in that case correct, just unexplained.
-    items.push(`
-      <span class="activity-item context-item" title="Approx. context window used, sized to this session's own model — Claude Code compacts automatically as this nears 100%">
-        <span class="context-bar-track"><span class="context-bar-fill context-${usageBand(session.contextUsedPercent)}" style="width:${Math.min(100, session.contextUsedPercent)}%"></span></span>
-        ${pct}% ctx
-      </span>
-    `);
-  }
-  if (items.length === 0) return '';
-  return `<div class="activity-line">${items.join('')}</div>`;
+  const hasCost = typeof session.costUsd === 'number';
+  const costText = hasCost ? `$${session.costUsd.toFixed(2)}` : '—';
+  const costItem = `<span class="activity-item${hasCost ? '' : ' muted'}" title="Total cost so far this session">${costText}</span>`;
+
+  const hasContext = typeof session.contextUsedPercent === 'number';
+  // "/200k" dropped from the tooltip — no longer true for every session
+  // since lib/transcriptPreview.mjs now sizes the window per the
+  // session's own model (1M for current-gen models, 200k otherwise).
+  // The auto-compaction note answers the confusion a 100% reading
+  // actually caused in real use (captured verbatim in a real session's
+  // own preview text during this design pass: "why for some agents...
+  // is it shoing 100% ctx? it's unclear... better to have more
+  // clarity") — the number was in that case correct, just unexplained.
+  const contextTitle = hasContext
+    ? "Approx. context window used, sized to this session's own model — Claude Code compacts automatically as this nears 100%"
+    : 'No context-window reading yet for this session';
+  const fillWidth = hasContext ? Math.min(100, session.contextUsedPercent) : 0;
+  const fillClass = hasContext ? ` context-${usageBand(session.contextUsedPercent)}` : '';
+  const contextText = hasContext ? `${Math.round(session.contextUsedPercent)}% ctx` : '— ctx';
+  const contextItem = `
+    <span class="activity-item context-item${hasContext ? '' : ' muted'}" title="${contextTitle}">
+      <span class="context-bar-track"><span class="context-bar-fill${fillClass}" style="width:${fillWidth}%"></span></span>
+      ${contextText}
+    </span>
+  `;
+  return `<div class="activity-line">${costItem}${contextItem}</div>`;
 }
 
 // Mirrors this user's own statusline footer (~/.claude/statusline.ps1
@@ -331,18 +339,16 @@ function rateLimitLineHtml(session) {
 // the data exists yet — a session with no statusline sidecar (most of
 // them, right now: sidecars only exist for sessions active since this
 // user wired up their statusline) still renders the same two-line shape,
-// just with a dimmed placeholder line in place of what's missing, so
-// card heights stay consistent across the whole list rather than jagged
-// depending on which sessions happen to have data.
+// just with a dimmed placeholder in place of what's missing, so card
+// heights stay consistent across the whole list rather than jagged
+// depending on which sessions happen to have data. costContextLineHtml
+// always returns a line now (cost and context each fall back to their
+// own "—" placeholder), so only the rate-limit line still needs one here.
 function activityStripHtml(session) {
   const costContextLine = costContextLineHtml(session);
   const rateLine = rateLimitLineHtml(session);
-  if (!costContextLine && !rateLine) {
-    return `<div class="activity-strip is-empty muted" title="No cost/context/rate-limit data yet — appears once this session has run with the statusline sidecar or a cost checkpoint in its transcript">no recent activity data</div>`;
-  }
-  const costContextPlaceholder = `<div class="activity-line muted">no cost/context data yet</div>`;
   const ratePlaceholder = `<div class="activity-line muted" title="Rate limits come from this user's own statusline sidecar — none written for this session yet">no rate-limit data yet</div>`;
-  return `<div class="activity-strip">${costContextLine || costContextPlaceholder}${rateLine || ratePlaceholder}</div>`;
+  return `<div class="activity-strip">${costContextLine}${rateLine || ratePlaceholder}</div>`;
 }
 
 function escapeHtml(str) {
@@ -382,14 +388,24 @@ function sparklineSvg(values) {
   `;
 }
 
-function statCardHtml({ label, value, sparkline, title }) {
+function statCardHtml({ label, value, sparkline, title, note }) {
   return `
     <div class="stat-card" title="${escapeHtml(title)}">
       <span class="stat-label">${escapeHtml(label)}</span>
       <span class="stat-value">${escapeHtml(value)}</span>
+      ${note ? `<span class="stat-note">${escapeHtml(note)}</span>` : ''}
       ${sparkline}
     </div>
   `;
+}
+
+// Covers only "have" of the "total" tracked sessions when some have no
+// cost/context data yet (no sidecar, no cost-state line seen) — said
+// plainly on the card instead of presenting a partial sum/average as if
+// it summed every session (previously the card just showed $X with no
+// hint that 12 of 26 sessions never contributed to it).
+function partialCoverageNote(have, total) {
+  return have < total ? `${have} of ${total} sessions` : '';
 }
 
 // Sessions tracked / live now are exact counts straight off the sessions
@@ -401,6 +417,8 @@ function renderStats(stats) {
   if (!stats) return;
   const costLabel = stats.totalCostUsd == null ? '—' : `$${stats.totalCostUsd.toFixed(2)}`;
   const contextLabel = stats.avgContextUsedPercent == null ? '—' : `${Math.round(stats.avgContextUsedPercent)}%`;
+  const costNote = partialCoverageNote(stats.totalCostSessionCount, stats.sessionsTracked);
+  const contextNote = partialCoverageNote(stats.avgContextSessionCount, stats.sessionsTracked);
   statCardsEl.innerHTML = [
     statCardHtml({
       label: 'Sessions tracked',
@@ -419,12 +437,14 @@ function renderStats(stats) {
       value: costLabel,
       sparkline: sparklineSvg(stats.sparklines.totalCostUsd),
       title: 'Sum of cost across every session with cost data',
+      note: costNote,
     }),
     statCardHtml({
       label: 'Avg context used',
       value: contextLabel,
       sparkline: sparklineSvg(stats.sparklines.avgContextUsedPercent),
       title: 'Average context-window usage across sessions with context data',
+      note: contextNote,
     }),
   ].join('');
 }
@@ -604,7 +624,7 @@ function renderRow(row, session, sessionsById) {
     </div>
     <div class="row-actions">
       <button class="btn ${actionClass}" data-action="resume" title="${escapeHtml(actionTitle)}" ${disabled ? 'disabled' : ''}>
-        ${label}
+        ${escapeHtml(label)}
       </button>
       <button class="icon-btn" data-action="copy" title="${COPY_LABEL}" aria-label="${COPY_LABEL}">${COPY_ICON}</button>
       ${canPause ? `<button class="icon-btn icon-btn-pause" data-action="pause" title="${PAUSE_LABEL}" aria-label="${PAUSE_LABEL}">${PAUSE_ICON}</button>` : ''}
@@ -756,7 +776,8 @@ async function resumeSession(session, row) {
   // calling renderRow immediately (the old behavior) wiped both in the
   // same tick they were added, so neither was ever visible.
   await new Promise((resolve) => setTimeout(resolve, succeeded ? 700 : 500));
-  renderRow(row, session);
+  // Without the map a parent row loses its child-status override on rebuild.
+  renderRow(row, session, new Map((rawSessions ?? []).map((s) => [s.sessionId, s])));
 }
 
 // The inline Attach button on a parent row (childLinkHtml) has no row of
