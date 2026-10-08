@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.mjs",
     "launch": "node scripts/launch.mjs",
+    "setup-statusline": "node scripts/setup-statusline.mjs",
     "test": "node --test"
   }
 }

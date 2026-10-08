@@ -96,6 +96,38 @@ runs the identical underlying script. Two independent reasons, both real:
    this staleness — that's the actual reason to prefer it for a shortcut
    specifically, not a blanket "don't use pnpm."
 
+## Optional: wire up the statusline sidecar
+
+The dashboard's rate-limit numbers (5h/7d used %) have no transcript
+equivalent at all — they only ever come from an optional statusline sidecar
+file the user's own Claude Code writes. If the user wants that, run from the
+repo root:
+
+```
+npm run setup-statusline
+```
+
+Don't hand-edit `settings.json` for this — the script resolves the same
+config directory Claude Code itself uses (`CLAUDE_CONFIG_DIR`, else
+`~/.claude`), keeps a one-time backup
+(`settings.json.bak-resumeragent`) before its first change, and — this is
+the part a hand-edit gets wrong — if the user already has a statusline
+configured, it keeps it: their command still runs, chained behind the
+sidecar, instead of being silently replaced. `-- --status` reports what's
+configured without changing anything; `-- --remove` undoes it, restoring
+whatever statusline the user had before (or removing the key if they had
+none).
+
+**Verify it worked:** after the user's *next* Claude Code message (the
+statusline only runs once a line is needed, not on install), check that a
+file appeared under `<config dir>/activity/` named `<session_id>.json`. If
+it didn't appear, re-run with `-- --status` to confirm the statusLine entry
+is actually theirs, and check that `node` is the one on the user's PATH (not
+some other interpreter shadowing it).
+
+This step is optional and purely additive — skip it if the user doesn't
+care about rate limits; cost and context-window % already work without it.
+
 ## Troubleshooting — match the symptom, apply the fix, don't guess
 
 | Symptom | Cause | Fix |
