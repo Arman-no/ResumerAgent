@@ -174,6 +174,45 @@ function sanitizeTitle(session) {
   return `Claude: ${safe || safeFallback || 'session'}`;
 }
 
+// Every value here reaches a shell (`claude --resume <sessionId>`,
+// `claude stop <id>`); a sessionId comes from a transcript's *filename*, so
+// `x&calc.jsonl` would otherwise inject. Claude Code ids are always these shapes.
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const JOB_ID_PATTERN = /^[0-9a-f]{8}$/i;
+
+// A new resume shows up in `claude agents`/the registry only seconds later,
+// so a double-click (or Resume then Purge) would pass the "dead" check twice.
+// ponytail: fixed per-session cooldown, not a real in-flight tracker.
+const ACTION_COOLDOWN_MS = 15_000;
+const recentActions = new Map();
+
+// Shared by resume/purge/pause/close: validates the id, re-resolves the
+// session from the server's own fresh list (never the request body), and
+// refuses a second action on the same session inside the cooldown. Writes
+// the error response itself and returns null when the caller must stop.
+async function resolveActionTarget(sessionId, res) {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    res.writeHead(400).end('Invalid sessionId');
+    return null;
+  }
+  const session = (await getSessionsPayload()).find((s) => s.sessionId === sessionId);
+  if (!session) {
+    res.writeHead(404).end('Unknown session');
+    return null;
+  }
+  if (session.id != null && !JOB_ID_PATTERN.test(session.id)) {
+    res.writeHead(400).end('Invalid job id');
+    return null;
+  }
+  const last = recentActions.get(sessionId);
+  if (last && Date.now() - last < ACTION_COOLDOWN_MS) {
+    res.writeHead(409).end('Another action on this session just ran; wait a few seconds and refresh');
+    return null;
+  }
+  recentActions.set(sessionId, Date.now());
+  return session;
+}
+
 // A live session is only ever actioned if it's a background job with a
 // real id (claude attach <id> — a view, never a resume). Everything else
 // live — interactive, or background missing its id — is refused. This is
@@ -250,13 +289,8 @@ async function handleResume(req, res) {
   // version trusted cwd/live/kind straight from the request body, which
   // meant the safety guard below was only as good as whatever the client
   // happened to send.
-  const sessions = await getSessionsPayload();
-  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
-
-  if (!session) {
-    res.writeHead(404).end('Unknown session');
-    return;
-  }
+  const session = await resolveActionTarget(requestBody.sessionId, res);
+  if (!session) return;
 
   if (!canSafelyAct(session)) {
     res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to act on this session');
@@ -362,13 +396,8 @@ async function handlePurge(req, res) {
   // session can safely be attached to, but there is no safe reason to
   // ever move a live session's files, so any live (or unconfirmed-dead)
   // session is refused outright, full stop.
-  const sessions = await getSessionsPayload();
-  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
-
-  if (!session) {
-    res.writeHead(404).end('Unknown session');
-    return;
-  }
+  const session = await resolveActionTarget(requestBody.sessionId, res);
+  if (!session) return;
 
   if (session.liveUnknown || session.live) {
     res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to purge a live or unconfirmed-dead session');
@@ -422,13 +451,8 @@ async function handlePause(req, res) {
 
   // Same server-side lookup pattern as /api/resume and /api/purge — the
   // body's sessionId is only ever a key into our own fresh view.
-  const sessions = await getSessionsPayload();
-  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
-
-  if (!session) {
-    res.writeHead(404).end('Unknown session');
-    return;
-  }
+  const session = await resolveActionTarget(requestBody.sessionId, res);
+  if (!session) return;
 
   if (!canPause(session)) {
     res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to pause this session');
@@ -472,13 +496,8 @@ async function handleClose(req, res) {
     return;
   }
 
-  const sessions = await getSessionsPayload();
-  const session = sessions.find((s) => s.sessionId === requestBody.sessionId);
-
-  if (!session) {
-    res.writeHead(404).end('Unknown session');
-    return;
-  }
+  const session = await resolveActionTarget(requestBody.sessionId, res);
+  if (!session) return;
 
   if (!canClose(session)) {
     res.writeHead(session.liveUnknown ? 409 : 400).end('Refusing to close this session');
